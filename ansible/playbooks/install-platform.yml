@@ -1,0 +1,106 @@
+---
+- name: Install Helm + MetalLB + Nginx Ingress on control plane
+  hosts: control_plane
+  become: false
+  vars:
+    metallb_version: "v0.14.9"
+    kubeconfig: /home/ubuntu/.kube/config
+
+  tasks:
+    # ── Helm ──────────────────────────────────────────────────────────────
+    - name: Check if Helm is installed
+      command: which helm
+      register: helm_check
+      failed_when: false
+      changed_when: false
+
+    - name: Download Helm install script
+      get_url:
+        url: https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        dest: /tmp/get-helm.sh
+        mode: '0755'
+      when: helm_check.rc != 0
+
+    - name: Install Helm
+      become: true
+      command: /tmp/get-helm.sh
+      when: helm_check.rc != 0
+
+    # ── MetalLB ───────────────────────────────────────────────────────────
+    - name: Check if MetalLB is installed
+      command: kubectl get ns metallb-system
+      register: metallb_check
+      failed_when: false
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Install MetalLB
+      command: kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/{{ metallb_version }}/config/manifests/metallb-native.yaml
+      when: metallb_check.rc != 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for MetalLB controller to be ready
+      command: kubectl rollout status deployment/controller -n metallb-system --timeout=120s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for MetalLB speaker to be ready
+      command: kubectl rollout status daemonset/speaker -n metallb-system --timeout=120s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Copy MetalLB config manifest
+      copy:
+        src: ../manifests/metallb-config.yml
+        dest: /tmp/metallb-config.yml
+
+    - name: Apply MetalLB IP pool config
+      command: kubectl apply -f /tmp/metallb-config.yml
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    # ── Nginx Ingress ─────────────────────────────────────────────────────
+    - name: Add ingress-nginx Helm repo
+      command: helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+      register: repo_add
+      failed_when: repo_add.rc != 0 and 'already exists' not in repo_add.stderr
+      changed_when: "'already exists' not in repo_add.stderr"
+
+    - name: Update Helm repos
+      command: helm repo update
+
+    - name: Check if ingress-nginx is installed
+      command: helm status ingress-nginx -n ingress-nginx
+      register: ingress_check
+      failed_when: false
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Install Nginx Ingress Controller
+      command: >
+        helm install ingress-nginx ingress-nginx/ingress-nginx
+        --namespace ingress-nginx
+        --create-namespace
+        --set controller.service.type=LoadBalancer
+      when: ingress_check.rc != 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for Nginx Ingress to be ready
+      command: kubectl rollout status deployment/ingress-nginx-controller -n ingress-nginx --timeout=120s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    # ── Verify ────────────────────────────────────────────────────────────
+    - name: Get Ingress external IP (LoadBalancer)
+      command: kubectl get svc ingress-nginx-controller -n ingress-nginx
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: ingress_svc
+
+    - name: Show Ingress service
+      debug:
+        msg: "{{ ingress_svc.stdout_lines }}"
