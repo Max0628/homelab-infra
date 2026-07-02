@@ -1,0 +1,39 @@
+# 兩層 PKI 架構：
+# 1. selfsigned-bootstrap  — 只用來自簽 root CA 憑證本身
+# 2. homelab-root-ca       — 唯一需要裝進手機/Mac 信任清單的憑證
+# 3. homelab-ca-issuer     — 之後所有服務（GitLab, ArgoCD, Grafana...）
+#                            的憑證都由這個 issuer 簽發，全部共用同一條信任鏈
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-bootstrap
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: homelab-root-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: homelab-root-ca
+  secretName: homelab-root-ca-secret
+  duration: 87600h   # 10 年
+  renewBefore: 720h  # 到期前 30 天更新
+  privateKey:
+    algorithm: RSA
+    size: 2048
+  issuerRef:
+    name: selfsigned-bootstrap
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: homelab-ca-issuer
+spec:
+  ca:
+    secretName: homelab-root-ca-secret

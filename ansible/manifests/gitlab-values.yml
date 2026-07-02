@@ -9,10 +9,9 @@ global:
   ingress:
     class: nginx
     configureCertmanager: false
-    annotations:
-      cert-manager.io/cluster-issuer: selfsigned-issuer
     tls:
       enabled: true
+      secretName: gitlab-wildcard-tls
 
   initialRootPassword:
     secret: gitlab-root-password

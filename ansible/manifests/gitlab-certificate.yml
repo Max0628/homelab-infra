@@ -1,0 +1,19 @@
+# GitLab chart 產生 3 個獨立 ingress（webservice/registry/minio），各自只有
+# 單一 host，但共用同一個 secretName。若讓 cert-manager ingress-shim
+# 自動幫每個 ingress 各建一個 Certificate，會互搶同一個 secret 互相覆蓋。
+# 改用一個明確的多 SAN 憑證涵蓋所有 host，ingress 只負責讀取現成的 secret。
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gitlab-wildcard-tls
+  namespace: gitlab
+spec:
+  secretName: gitlab-wildcard-tls
+  dnsNames:
+    - gitlab.192.168.100.200.nip.io
+    - registry.192.168.100.200.nip.io
+    - minio.192.168.100.200.nip.io
+  issuerRef:
+    name: homelab-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io

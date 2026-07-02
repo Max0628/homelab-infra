@@ -1,0 +1,41 @@
+---
+- name: Set up internal Root CA for homelab TLS
+  hosts: control_plane
+  become: false
+  vars:
+    kubeconfig: /home/ubuntu/.kube/config
+
+  tasks:
+    - name: Copy Root CA manifest
+      copy:
+        src: ../manifests/homelab-ca-issuer.yml
+        dest: /tmp/homelab-ca-issuer.yml
+
+    - name: Apply Root CA issuer chain
+      command: kubectl apply -f /tmp/homelab-ca-issuer.yml
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for root CA certificate to be ready
+      command: kubectl wait --for=condition=Ready certificate/homelab-root-ca -n cert-manager --timeout=60s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Extract Root CA public certificate
+      shell: kubectl get secret homelab-root-ca-secret -n cert-manager -o jsonpath="{.data['ca\.crt']}" | base64 -d
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: root_ca_cert
+      changed_when: false
+
+    - name: Save Root CA cert locally
+      local_action:
+        module: copy
+        content: "{{ root_ca_cert.stdout }}"
+        dest: /tmp/homelab-root-ca.crt
+
+    - name: Show next steps
+      debug:
+        msg:
+          - "Root CA cert saved to: /tmp/homelab-root-ca.crt"
+          - "AirDrop / 傳輸這個檔案到 iPhone 與 Mac，並安裝為受信任的憑證。"
