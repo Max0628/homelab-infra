@@ -1,0 +1,141 @@
+---
+- name: Install cert-manager
+  hosts: control_plane
+  become: false
+  vars:
+    kubeconfig: /home/ubuntu/.kube/config
+    certmanager_version: "v1.16.2"
+
+  tasks:
+    - name: Add jetstack Helm repo
+      command: helm repo add jetstack https://charts.jetstack.io
+      register: repo_add
+      failed_when: repo_add.rc != 0 and 'already exists' not in repo_add.stderr
+      changed_when: "'already exists' not in repo_add.stderr"
+
+    - name: Update Helm repos
+      command: helm repo update
+
+    - name: Check if cert-manager is installed
+      command: helm status cert-manager -n cert-manager
+      register: cm_check
+      failed_when: false
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Install cert-manager
+      command: >
+        helm install cert-manager jetstack/cert-manager
+        --namespace cert-manager
+        --create-namespace
+        --version {{ certmanager_version }}
+        --set installCRDs=true
+      when: cm_check.rc != 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for cert-manager to be ready
+      command: kubectl rollout status deployment/cert-manager -n cert-manager --timeout=120s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Copy selfsigned ClusterIssuer manifest
+      copy:
+        src: ../manifests/selfsigned-issuer.yml
+        dest: /tmp/selfsigned-issuer.yml
+
+    - name: Apply selfsigned ClusterIssuer
+      command: kubectl apply -f /tmp/selfsigned-issuer.yml
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+
+- name: Install GitLab CE
+  hosts: control_plane
+  become: false
+  vars:
+    kubeconfig: /home/ubuntu/.kube/config
+
+  tasks:
+    - name: Add GitLab Helm repo
+      command: helm repo add gitlab https://charts.gitlab.io
+      register: repo_add
+      failed_when: repo_add.rc != 0 and 'already exists' not in repo_add.stderr
+      changed_when: "'already exists' not in repo_add.stderr"
+
+    - name: Update Helm repos
+      command: helm repo update
+
+    - name: Create gitlab namespace
+      command: kubectl create namespace gitlab
+      register: ns_create
+      failed_when: ns_create.rc != 0 and 'already exists' not in ns_create.stderr
+      changed_when: ns_create.rc == 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Generate random root password
+      command: openssl rand -base64 16
+      register: root_password
+      changed_when: false
+
+    - name: Check if root password secret exists
+      command: kubectl get secret gitlab-root-password -n gitlab
+      register: secret_check
+      failed_when: false
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Create GitLab root password secret
+      command: >
+        kubectl create secret generic gitlab-root-password
+        --namespace gitlab
+        --from-literal=password={{ root_password.stdout }}
+      when: secret_check.rc != 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Save root password locally
+      local_action:
+        module: copy
+        content: "GitLab root password: {{ root_password.stdout }}\n"
+        dest: /tmp/gitlab-root-password.txt
+      when: secret_check.rc != 0
+
+    - name: Copy GitLab values file
+      copy:
+        src: ../manifests/gitlab-values.yml
+        dest: /tmp/gitlab-values.yml
+
+    - name: Check if GitLab is installed
+      command: helm status gitlab -n gitlab
+      register: gitlab_check
+      failed_when: false
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Install GitLab (this takes 10-15 minutes)
+      command: >
+        helm install gitlab gitlab/gitlab
+        --namespace gitlab
+        --version 9.11.7
+        --timeout 900s
+        -f /tmp/gitlab-values.yml
+      when: gitlab_check.rc != 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for GitLab webservice
+      command: kubectl rollout status deployment/gitlab-webservice-default -n gitlab --timeout=600s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Show GitLab access info
+      debug:
+        msg:
+          - "GitLab URL: https://gitlab.192.168.100.200.nip.io"
+          - "Username:   root"
+          - "Password:   cat /tmp/gitlab-root-password.txt"

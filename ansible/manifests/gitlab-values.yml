@@ -1,0 +1,65 @@
+installCertmanager: false
+
+global:
+  hosts:
+    domain: 192.168.100.200.nip.io
+    https: true
+    externalIP: 192.168.100.200
+
+  ingress:
+    class: nginx
+    configureCertmanager: false
+    annotations:
+      cert-manager.io/cluster-issuer: selfsigned-issuer
+    tls:
+      enabled: true
+
+  initialRootPassword:
+    secret: gitlab-root-password
+    key: password
+
+  minio:
+    enabled: true
+
+  kas:
+    enabled: false
+
+# 停用 bundled nginx-ingress，使用我們自己的
+nginx-ingress:
+  enabled: false
+
+# 停用 bundled prometheus，之後自己裝
+prometheus:
+  install: false
+
+# GitLab Runner 之後單獨裝
+gitlab-runner:
+  install: false
+
+# v9.x bundled services（v10.0 後移除）
+redis:
+  install: true
+
+postgresql:
+  install: true
+
+gitlab:
+  webservice:
+    minReplicas: 1
+    maxReplicas: 1
+  sidekiq:
+    minReplicas: 1
+    maxReplicas: 1
+  kas:
+    enabled: false
+  toolbox:
+    backups:
+      cron:
+        enabled: false
+
+registry:
+  enabled: true
+
+# dummy email 讓 certmanager-issuer sub-chart 通過 schema 驗證
+certmanager-issuer:
+  email: admin@homelab.local
