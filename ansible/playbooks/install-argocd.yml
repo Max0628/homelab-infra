@@ -1,0 +1,68 @@
+---
+- name: Install ArgoCD via Helm
+  hosts: control_plane
+  become: false
+  vars:
+    kubeconfig: /home/ubuntu/.kube/config
+
+  tasks:
+    - name: Add argo Helm repo
+      command: helm repo add argo https://argoproj.github.io/argo-helm
+      register: repo_add
+      failed_when: repo_add.rc != 0 and 'already exists' not in repo_add.stderr
+      changed_when: "'already exists' not in repo_add.stderr"
+
+    - name: Update Helm repos
+      command: helm repo update
+
+    - name: Copy ArgoCD values file
+      copy:
+        src: ../manifests/argocd-values.yml
+        dest: /tmp/argocd-values.yml
+
+    - name: Check if ArgoCD is installed
+      command: helm status argocd -n argocd
+      register: argocd_check
+      failed_when: false
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Install ArgoCD
+      command: >
+        helm install argocd argo/argo-cd
+        --namespace argocd
+        --create-namespace
+        --timeout 300s
+        -f /tmp/argocd-values.yml
+      when: argocd_check.rc != 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for ArgoCD server to be ready
+      command: kubectl rollout status deployment/argocd-server -n argocd --timeout=180s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Get initial admin password
+      command: kubectl get secret argocd-initial-admin-secret -n argocd -o jsonpath="{.data.password}"
+      register: admin_password_b64
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Decode admin password
+      set_fact:
+        admin_password: "{{ admin_password_b64.stdout | b64decode }}"
+
+    - name: Save admin password locally
+      local_action:
+        module: copy
+        content: "ArgoCD admin password: {{ admin_password }}\n"
+        dest: /tmp/argocd-admin-password.txt
+
+    - name: Show ArgoCD access info
+      debug:
+        msg:
+          - "ArgoCD URL: https://argocd.192.168.100.200.nip.io"
+          - "Username:   admin"
+          - "Password:   cat /tmp/argocd-admin-password.txt"

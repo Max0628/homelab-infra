@@ -1,0 +1,12 @@
+configs:
+  params:
+    server.insecure: true
+
+server:
+  ingress:
+    enabled: true
+    ingressClassName: nginx
+    hostname: argocd.192.168.100.200.nip.io
+    annotations:
+      cert-manager.io/cluster-issuer: selfsigned-issuer
+    tls: true
