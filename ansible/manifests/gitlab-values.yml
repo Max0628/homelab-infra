@@ -5,6 +5,7 @@ global:
     domain: 192.168.100.200.nip.io
     https: true
     externalIP: 192.168.100.200
+    ssh: gitlab.192.168.100.201.nip.io
 
   ingress:
     class: nginx
@@ -43,6 +44,9 @@ postgresql:
   install: true
 
 gitlab:
+  gitlab-shell:
+    service:
+      type: LoadBalancer
   webservice:
     minReplicas: 1
     maxReplicas: 1

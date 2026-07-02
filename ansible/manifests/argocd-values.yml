@@ -1,6 +1,28 @@
 configs:
   params:
     server.insecure: true
+  tls:
+    certificates:
+      gitlab.192.168.100.200.nip.io: |
+        -----BEGIN CERTIFICATE-----
+        MIIDADCCAeigAwIBAgIQQ4EPTt/hfcSgQe+Ird+X6jANBgkqhkiG9w0BAQsFADAa
+        MRgwFgYDVQQDEw9ob21lbGFiLXJvb3QtY2EwHhcNMjYwNzAyMTU0NzQ5WhcNMzYw
+        NjI5MTU0NzQ5WjAaMRgwFgYDVQQDEw9ob21lbGFiLXJvb3QtY2EwggEiMA0GCSqG
+        SIb3DQEBAQUAA4IBDwAwggEKAoIBAQDR/IYKtFlkJ1z/QKy0s3i+6nFGYBsG6XZT
+        yH4alSLJC3BBYfOeaJ0eKkuEeky8uySVYqcqSs4v9Jlp9yzwASbJm9jhAEe7j5HZ
+        sy0Ta+BmLvK4bT4RkMeS9TXzDXi1u9xlb8BXrV6jnPvMs/tZhLj6ntNCkTarKZcM
+        y92O1pjrCYcgSr2b8t1cX4a3Awhy2IMh0o8f2jJx/ONBWgiKkrwDcVAZB7D1MsDi
+        vB76SGM672/6relBIbbCyCcmghpNW8stQeQJOfjf27uF1M0n63njStN5T2tkj4Q6
+        +FVRlxogIZxgO/7a61/NRiYFRa89JIQylS8RksUPwzzwriMJTzkfAgMBAAGjQjBA
+        MA4GA1UdDwEB/wQEAwICpDAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQWBBTBzsy+
+        Lel4Tw4h1gAZRuAFJDFwqzANBgkqhkiG9w0BAQsFAAOCAQEAGCeAfGHQMfnOD8gf
+        0qqLl29sfmoDVcM7V4YHf4Is8ezh6r8Vv1zzQXRDeddqbF4mu4x68yyFnSbfb9sD
+        TsSMOlZcgkKJe6tR5IMBZcocOwNoY6RFrI2+LN8+qUu9RICFg/UzSppHkW29IQvy
+        YJdHaHLYO4o0B/J5Mtsz/G7W1VbtmLMQg74s0ty1KX3jhGtDvJiVMXOR+8VBMya8
+        fCpY+lYSkOMIyMEfG77Au5xKyaOtQpNHUaL+2hSb1pEyeX2vaggNYpaS8bvBYgaa
+        6WxIOhVXkuWL+FcgaCQXaKVDUniv/rsZd3pNEvkmXCwEleBR9BYKmkn9jFGUui2p
+        v1IPKg==
+        -----END CERTIFICATE-----
 
 server:
   ingress:
