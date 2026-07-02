@@ -1,0 +1,84 @@
+---
+- name: Install Longhorn prerequisites on all nodes
+  hosts: all
+  become: true
+
+  tasks:
+    - name: Install open-iscsi and nfs-common
+      apt:
+        name:
+          - open-iscsi
+          - nfs-common
+          - util-linux
+        state: present
+        update_cache: true
+
+    - name: Enable and start iscsid
+      systemd:
+        name: iscsid
+        state: started
+        enabled: true
+
+
+- name: Install Longhorn via Helm
+  hosts: control_plane
+  become: false
+  vars:
+    kubeconfig: /home/ubuntu/.kube/config
+    longhorn_version: "1.7.2"
+
+  tasks:
+    - name: Add Longhorn Helm repo
+      command: helm repo add longhorn https://charts.longhorn.io
+      register: repo_add
+      failed_when: repo_add.rc != 0 and 'already exists' not in repo_add.stderr
+      changed_when: "'already exists' not in repo_add.stderr"
+
+    - name: Update Helm repos
+      command: helm repo update
+
+    - name: Check if Longhorn is installed
+      command: helm status longhorn -n longhorn-system
+      register: longhorn_check
+      failed_when: false
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Install Longhorn
+      command: >
+        helm install longhorn longhorn/longhorn
+        --namespace longhorn-system
+        --create-namespace
+        --version {{ longhorn_version }}
+        --set defaultSettings.defaultReplicaCount=2
+      when: longhorn_check.rc != 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for Longhorn manager to be ready
+      command: kubectl rollout status daemonset/longhorn-manager -n longhorn-system --timeout=300s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for Longhorn driver deployer
+      command: kubectl rollout status deployment/longhorn-driver-deployer -n longhorn-system --timeout=180s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Verify Longhorn StorageClass
+      command: kubectl get storageclass longhorn
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: sc_check
+
+    - name: Set Longhorn as default StorageClass
+      command: >
+        kubectl patch storageclass longhorn
+        -p '{"metadata":{"annotations":{"storageclass.kubernetes.io/is-default-class":"true"}}}'
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Show Longhorn StorageClass
+      debug:
+        msg: "{{ sc_check.stdout_lines }}"
