@@ -1,0 +1,12 @@
+gitlabUrl: https://gitlab.192.168.100.200.nip.io
+
+# runnerToken 不進版控，helm install/upgrade 時用 --set runnerToken=... 帶入
+
+certsSecretName: homelab-ca-cert
+
+runners:
+  config: |
+    [[runners]]
+      [runners.kubernetes]
+        namespace = "gitlab-runner"
+        image = "alpine:latest"
