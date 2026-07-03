@@ -34,13 +34,13 @@ variable "nodes" {
     "k8s-worker1" = {
       vcpu    = 2
       ram_mb  = 20480
-      disk_gb = 120
+      disk_gb = 200
       ip      = "192.168.100.11"
     }
     "k8s-worker2" = {
       vcpu    = 2
       ram_mb  = 20480
-      disk_gb = 120
+      disk_gb = 200
       ip      = "192.168.100.12"
     }
   }

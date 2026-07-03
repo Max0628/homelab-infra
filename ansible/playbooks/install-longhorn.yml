@@ -45,6 +45,10 @@
       environment:
         KUBECONFIG: "{{ kubeconfig }}"
 
+    # defaultSettings.defaultReplicaCount 只影響用 Longhorn UI 建立的 volume；
+    # 實際 PVC 動態配置吃的是 StorageClass 的 numberOfReplicas，
+    # 由 persistence.defaultClassReplicaCount 控制。兩個只有 2 個 worker
+    # 節點時都要設成 2，否則 volume 永遠是 degraded（3 副本擠不進 2 台機器）。
     - name: Install Longhorn
       command: >
         helm install longhorn longhorn/longhorn
@@ -52,6 +56,7 @@
         --create-namespace
         --version {{ longhorn_version }}
         --set defaultSettings.defaultReplicaCount=2
+        --set persistence.defaultClassReplicaCount=2
       when: longhorn_check.rc != 0
       environment:
         KUBECONFIG: "{{ kubeconfig }}"

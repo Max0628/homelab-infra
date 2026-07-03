@@ -1,0 +1,55 @@
+deploymentMode: SingleBinary
+
+loki:
+  auth_enabled: false
+
+  commonConfig:
+    replication_factor: 1
+
+  storage:
+    type: filesystem
+
+  schemaConfig:
+    configs:
+      - from: "2026-01-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: loki_index_
+          period: 24h
+
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    storageClass: longhorn
+    size: 20Gi
+
+# 純內部存取（Grafana + Promtail 皆在 cluster 內），不需要額外的 gateway 層
+gateway:
+  enabled: false
+
+# loki-canary 測試元件，homelab 不需要
+test:
+  enabled: false
+
+lokiCanary:
+  enabled: false
+
+# memcached-based cache，homelab 規模資料量小，不需要額外快取層
+resultsCache:
+  enabled: false
+chunksCache:
+  enabled: false
+
+monitoring:
+  selfMonitoring:
+    enabled: false
+
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
