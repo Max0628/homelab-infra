@@ -1,0 +1,48 @@
+- hosts: hypervisor
+  become: true
+  tasks:
+    - name: Install TLP
+      apt:
+        name: tlp
+        state: present
+        update_cache: true
+
+    - name: Ensure /etc/tlp.conf.d exists
+      file:
+        path: /etc/tlp.conf.d
+        state: directory
+        mode: "0755"
+
+    - name: Deploy homelab TLP overrides
+      copy:
+        src: ../files/tlp/50-homelab.conf
+        dest: /etc/tlp.conf.d/50-homelab.conf
+      notify: Reapply TLP settings
+
+    - name: Ensure TLP service enabled
+      systemd:
+        name: tlp
+        enabled: true
+        state: started
+
+    - name: Deploy CPU EPP workaround service
+      copy:
+        src: ../files/tlp/homelab-cpu-epp.service
+        dest: /etc/systemd/system/homelab-cpu-epp.service
+      notify: Reload systemd and restart EPP workaround
+
+    - name: Ensure CPU EPP workaround service enabled
+      systemd:
+        name: homelab-cpu-epp
+        enabled: true
+        state: started
+
+  handlers:
+    - name: Reapply TLP settings
+      command: tlp start
+
+    - name: Reload systemd and restart EPP workaround
+      systemd:
+        daemon_reload: true
+        name: homelab-cpu-epp
+        state: restarted

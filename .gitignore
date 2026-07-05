@@ -8,3 +8,9 @@ crash.log
 # Ansible
 *.retry
 ansible/inventory/group_vars/*/vault
+
+# Terraform plan output
+tfplan*
+
+# IDE
+.idea/

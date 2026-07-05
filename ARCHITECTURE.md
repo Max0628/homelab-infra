@@ -296,6 +296,39 @@ HA 需求，選最簡單的設定就好。
 
 ---
 
+## Host 電源管理（TLP）
+
+T480是二手筆電，長期插電當server用，為了降低CPU發熱/耗電，在host本身（不是VM
+裡面）裝了TLP，關閉turbo boost、切到powersave governor。這一層完全獨立於
+libvirt/k8s之下，VM看到的vCPU數量不受影響，純粹是實體CPU的頻率被壓低。
+
+- 設定：`ansible/files/tlp/50-homelab.conf`（drop-in，只覆蓋三個值，其餘沿用套件
+  預設）
+- 佈署：`ansible/playbooks/install-tlp.yml`，target是`ansible/inventory/hosts.yml`
+  裡新增的`hypervisor`群組（`t480`，`ansible_connection: local`，因為管理對象就是
+  ansible執行所在的這台機器本身）
+- Rollback：刪除該drop-in檔案（或git revert這次commit）+ 重跑playbook + `tlp
+  start`，不涉及任何VM或k8s，隨時可逆
+- 為什麼不做在terraform層（調VM的vcpu）：改vcpu會強制destroy+recreate整個VM
+  domain（斷線、MAC重新產生），而且vCPU數量同時是k8s排程用來計算「這個節點能塞下
+  多少pod request」的依據，調低容易造成`OutOfcpu`/`Pending`（已經實際踩過這個坑：
+  三台都改成1 vCPU後，control-plane本身的request就已經超過1000m，GitLab/Loki也
+  大量卡在Pending/CrashLoopBackOff，後來revert回2 vCPU解決）。TLP在host層調頻率則
+  完全不影響k8s的排程帳本，兩層互不干擾。
+
+**已知限制**：這台裝的TLP 1.6.1版本，`CPU_ENERGY_PERF_POLICY_ON_AC`這個設定
+（EPP，能耗/效能policy）套用不生效——手動寫入對應的sysfs
+（`/sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference`）是有效且
+穩定的，但透過TLP設定檔/`tlp start`就是不會套用，判斷是這個版本對HWP-active模式
+CPU的已知限制或bug，不是設定寫錯。因此另外用一個systemd oneshot service
+（`ansible/files/tlp/homelab-cpu-epp.service`，開機時對所有CPU核心的
+`energy_performance_preference`寫入`balance_power`，`After=tlp.service`確保排在
+TLP之後、蓋過它）繞過這個問題，一樣由`install-tlp.yml`佈署。CPU_BOOST_ON_AC（關
+turbo）跟CPU_SCALING_GOVERNOR_ON_AC（powersave）這兩個影響最大的設定，TLP本身是
+正常生效的，不受此限制影響。
+
+---
+
 ## Host-Native Applications（不進 k8s）
 
 `claude-sentinel` 和 `daily_log` 刻意留在 T480 host 上，用 user-level systemd

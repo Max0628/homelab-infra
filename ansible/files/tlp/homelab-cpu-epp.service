@@ -1,0 +1,12 @@
+[Unit]
+Description=Set CPU energy/performance policy (EPP) - workaround for TLP not applying CPU_ENERGY_PERF_POLICY_ON_AC
+After=tlp.service
+Wants=tlp.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'for f in /sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference; do echo balance_power > "$f"; done'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
