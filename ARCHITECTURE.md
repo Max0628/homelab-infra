@@ -221,18 +221,15 @@ worker 磁碟原本各 120GB，因為 host 實際還有大量剩餘空間（466G
 | Longhorn | 1.7.2 | 分散式 block storage |
 | cert-manager | - | 內部 PKI / TLS 憑證管理 |
 
-### Storage（Longhorn）踩過的坑
+### Storage（Longhorn）現況設定
 
-- StorageClass 的 `numberOfReplicas` 預設是 3，但只有 2 個 worker 節點可排程，第三
-  個副本永遠排不進去，所有 volume 會卡在 `degraded` 且不會自己好。修法：Helm 安裝
-  時加 `--set persistence.defaultClassReplicaCount=2`（這個值才是動態建立 PVC 真正
-  吃到的設定；`defaultSettings.defaultReplicaCount` 只影響用 Longhorn UI 手動建立
-  的 volume），並手動把既有 volume 的 `spec.numberOfReplicas` patch 成 2。
-- 每顆磁碟的 `storageReserved` 手動從自動計算的 ~34.6GB 降到 10GB，讓 Longhorn 可用
-  更多實際容量。
+- StorageClass 的 replica count 設為 2（跟可排程的 worker 節點數量一致）
+- 每顆磁碟的 `storageReserved` 設為 10GB
 - `storage-minimal-available-percentage`、`storage-over-provisioning-percentage`
-  一度分別調整過（10%、取消 overcommit 限制），後來 worker 磁碟從 120GB 擴到
-  200GB、根本原因（容量太小）解決後，兩個設定都改回預設值（25%、100%）。
+  維持預設值（25%、100%）
+
+這幾個值當初怎麼踩坑、怎麼調出來的，見 `TROUBLESHOOTING.md`「Storage
+（Longhorn）」章節。
 
 ---
 
@@ -311,21 +308,15 @@ libvirt/k8s之下，VM看到的vCPU數量不受影響，純粹是實體CPU的頻
   start`，不涉及任何VM或k8s，隨時可逆
 - 為什麼不做在terraform層（調VM的vcpu）：改vcpu會強制destroy+recreate整個VM
   domain（斷線、MAC重新產生），而且vCPU數量同時是k8s排程用來計算「這個節點能塞下
-  多少pod request」的依據，調低容易造成`OutOfcpu`/`Pending`（已經實際踩過這個坑：
-  三台都改成1 vCPU後，control-plane本身的request就已經超過1000m，GitLab/Loki也
-  大量卡在Pending/CrashLoopBackOff，後來revert回2 vCPU解決）。TLP在host層調頻率則
-  完全不影響k8s的排程帳本，兩層互不干擾。
+  多少pod request」的依據，調低容易造成`OutOfcpu`/`Pending`。TLP在host層調頻率則
+  完全不影響k8s的排程帳本，兩層互不干擾。實際踩過的坑跟數字證據見
+  `TROUBLESHOOTING.md`「Kubernetes 排程/資源」章節。
 
-**已知限制**：這台裝的TLP 1.6.1版本，`CPU_ENERGY_PERF_POLICY_ON_AC`這個設定
-（EPP，能耗/效能policy）套用不生效——手動寫入對應的sysfs
-（`/sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference`）是有效且
-穩定的，但透過TLP設定檔/`tlp start`就是不會套用，判斷是這個版本對HWP-active模式
-CPU的已知限制或bug，不是設定寫錯。因此另外用一個systemd oneshot service
-（`ansible/files/tlp/homelab-cpu-epp.service`，開機時對所有CPU核心的
-`energy_performance_preference`寫入`balance_power`，`After=tlp.service`確保排在
-TLP之後、蓋過它）繞過這個問題，一樣由`install-tlp.yml`佈署。CPU_BOOST_ON_AC（關
-turbo）跟CPU_SCALING_GOVERNOR_ON_AC（powersave）這兩個影響最大的設定，TLP本身是
-正常生效的，不受此限制影響。
+**已知限制**：`CPU_ENERGY_PERF_POLICY_ON_AC`（EPP）這個設定TLP本身套用不生效，
+用額外的systemd oneshot service（`ansible/files/tlp/homelab-cpu-epp.service`）
+繞過。`CPU_BOOST_ON_AC`（關turbo）跟`CPU_SCALING_GOVERNOR_ON_AC`（powersave）這
+兩個影響最大的設定則正常生效，不受此限制影響。除錯過程見`TROUBLESHOOTING.md`
+「Host 電源管理（TLP）」章節。
 
 ---
 

@@ -256,11 +256,10 @@ df -h /
 
 ---
 
-## 已知的坑（操作面，架構面的坑在 ARCHITECTURE.md）
+## 操作提醒
 
-- T480 本機 `~/.kube/config` 是舊 minikube 殘留設定，不要用預設路徑，見上面
-  「kubectl」章節。
-- Helm `--reuse-values` 只會合併不會刪除 key，要移除設定必須帶完整 values file。
 - `systemctl` 不加 `--user` 會找不到 claude-sentinel / daily_log 的 unit（這兩個是
   user-level，不是 system-level）。
 - Longhorn UI 沒有 ingress，只能 port-forward，見上面「Longhorn UI」章節。
+
+實際發生過的問題（症狀/原因/解法）都整理到 `TROUBLESHOOTING.md` 了，這裡不重複。
