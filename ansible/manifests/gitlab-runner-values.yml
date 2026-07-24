@@ -10,3 +10,22 @@ runners:
       [runners.kubernetes]
         namespace = "gitlab-runner"
         image = "alpine:latest"
+      # CI job pod 每次都是全新的（Kubernetes executor 沒有固定本機硬碟可以留快取），
+      # 接上 GitLab 自帶的 MinIO（gitlab-minio，Helm chart 內建的一部分，不是另外新裝的）
+      # 當快取後端，job 開始/結束時自動上傳/下載 .gitlab-ci.yml 裡 cache: 指定的資料夾。
+      # runner-cache 這個 bucket 是 MinIO 原本就有的，不用另外建。
+      [runners.cache]
+        Type = "s3"
+        Path = "gitlab-runner-cache"
+        Shared = true
+        [runners.cache.s3]
+          ServerAddress = "gitlab-minio-svc.gitlab.svc.cluster.local:9000"
+          BucketName = "runner-cache"
+          BucketLocation = "us-east-1"
+          Insecure = true
+  # 金鑰不寫在這個檔案裡（這個檔案會進 git）。secretName 指向的 Secret 是用
+  # kubectl 另外建的，跟 GitLab 自己那組 gitlab-minio-secret 的 accesskey/secretkey
+  # 是同一組值（這個 MinIO 的使用者/權限管理功能被鎖住，建不出限縮權限的專用帳號，
+  # 只能先用管理員金鑰——已與使用者確認過這個取捨，見 job-radar CI 優化的討論）。
+  cache:
+    secretName: minio-cache-access
