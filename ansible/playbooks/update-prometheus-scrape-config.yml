@@ -1,0 +1,36 @@
+---
+# 套用 kube-prometheus-stack-values.yml 的變更到既有 Helm release。
+#
+# 這個 values 檔案本身早就存在於版控，但原本的安裝沒有對應的 playbook 包起來
+# （像是手動下的 helm install），這次借加 additionalScrapeConfigs（host node-exporter）
+# 的機會順便補上，之後改這份 values 都走這支 playbook，不再是未版控的手動指令。
+#
+# chart 版本明確鎖定在目前已安裝的 87.6.0（見 helm list -n monitoring），避免
+# 像 install-argocd.yml / install-platform.yml 那次沒 pin 版本、helm repo update
+# 拉到非預期新版的狀況重演。
+#
+# --reuse-values：這個 release 原本安裝時 grafana.adminPassword 是用 --set 帶入、
+# 不在這份 values 檔裡（見檔案開頭註解）。不加這個 flag，helm upgrade -f values.yml
+# 會把沒在檔案裡出現的既有設定重置回 chart 預設值，包含把 admin 密碼改掉。
+
+- hosts: control_plane
+  become: false
+  vars:
+    kubeconfig: /home/ubuntu/.kube/config
+    chart_version: "87.6.0"
+
+  tasks:
+    - name: Copy kube-prometheus-stack values file
+      copy:
+        src: ../manifests/kube-prometheus-stack-values.yml
+        dest: /tmp/kube-prometheus-stack-values.yml
+
+    - name: Upgrade kube-prometheus-stack with updated values
+      command: >
+        helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack
+        --namespace monitoring
+        --version {{ chart_version }}
+        --reuse-values
+        -f /tmp/kube-prometheus-stack-values.yml
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"

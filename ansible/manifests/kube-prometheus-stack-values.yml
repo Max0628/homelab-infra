@@ -42,6 +42,14 @@ prometheus:
             requests:
               storage: 20Gi
 
+    # T480 host 本身跑在 hypervisor 層，不是 k8s 節點，ServiceMonitor 機制觸及不到，
+    # 用 static_config 直接指向 host 的 node-exporter（見 install-node-exporter.yml，
+    # 綁定在 virbr1 的 192.168.100.1，VM 內的 Prometheus 可直接連到）。
+    additionalScrapeConfigs:
+      - job_name: t480-host
+        static_configs:
+          - targets: ["192.168.100.1:9100"]
+
   ingress:
     enabled: true
     ingressClassName: nginx

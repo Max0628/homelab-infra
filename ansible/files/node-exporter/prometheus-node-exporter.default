@@ -1,0 +1,4 @@
+# 只綁在 virbr1（192.168.100.1），不綁 0.0.0.0——避免透過 tailscale0 對外暴露
+# （見 ARCHITECTURE.md「Tailscale Subnet Router」，host 同時是 subnet router，
+# 綁 0.0.0.0 會讓這個 metrics endpoint 意外可以從手機/Mac 連到）。
+ARGS="--web.listen-address=192.168.100.1:9100"

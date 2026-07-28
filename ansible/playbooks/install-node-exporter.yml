@@ -1,0 +1,41 @@
+---
+# T480 host 本身（hypervisor 層）加裝 node-exporter，補足實體機的觀測性盲區。
+# k8s 叢集內的 node-exporter（kube-prometheus-stack 內建）看到的是 VM 的虛擬 CPU，
+# 看不到 TLP 調整的實體 CPU 頻率/溫度、host 本身的磁碟/記憶體使用。
+#
+# 用 Ubuntu 套件（prometheus-node-exporter）而非手動下載 binary，跟 systemd 整合、
+# 之後 apt upgrade 會一併更新，管理成本最低。只綁 virbr1（192.168.100.1），
+# 不綁 0.0.0.0，避免經由 tailscale0 對外暴露（見
+# files/node-exporter/prometheus-node-exporter.default 的說明）。
+#
+# 見 ARCHITECTURE.md「Host-Native Applications」：這個模式（systemd + host 本身跑）
+# 跟 claude-sentinel/daily_log 一致，只是這次用 apt 套件而非 podman（node-exporter
+# 需要讀取 host 層級的 /proc /sys 資訊，跑在容器裡需要額外掛載、apt 套件更直接）。
+
+- hosts: hypervisor
+  become: true
+  tasks:
+    - name: Install prometheus-node-exporter
+      apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: true
+
+    - name: Bind node-exporter to virbr1 only (not 0.0.0.0)
+      copy:
+        src: ../files/node-exporter/prometheus-node-exporter.default
+        dest: /etc/default/prometheus-node-exporter
+      notify: Restart node-exporter
+
+    - name: Ensure node-exporter service enabled and started
+      systemd:
+        name: prometheus-node-exporter
+        enabled: true
+        state: started
+        daemon_reload: true
+
+  handlers:
+    - name: Restart node-exporter
+      systemd:
+        name: prometheus-node-exporter
+        state: restarted
