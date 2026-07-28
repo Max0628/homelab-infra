@@ -97,6 +97,7 @@ destroy + recreate 導致 libvirt 重新生成這個 chain，這條手動插入�
 
 ---
 
+<a name="storage-longhorn"></a>
 ## Storage（Longhorn）
 
 ### `numberOfReplicas` 預設 3，但只有 2 個 worker 節點可排程
@@ -137,6 +138,42 @@ worker 節點可排程（control-plane 有 taint），第三個副本永遠排�
 100%），不需要繼續頂著。
 
 **狀態**：已解決，根本原因（容量）已排除，暫時性設定已還原。
+
+### 舊 snapshot 沒清，讓 volume 實際磁碟佔用超過邏輯容量（>100%）
+
+**症狀**：`longhorn_volume_actual_size_bytes / longhorn_volume_capacity_bytes`
+算出來超過 100%（實測抓到 112.6%），比「快滿了」更怪——邏輯上一個 20Gi 的
+volume 不應該用超過 20Gi。
+
+**排查過程**：這次抓到的是 Prometheus 自己的資料庫 volume。一開始懷疑是不是
+`add-platform-observability`/`add-business-metrics-and-alerting` 這兩個
+change 新增大量指標（active target 28→41、series 73845→93244）把 Prometheus
+自己的磁碟撐爆——但查 Prometheus 自己回報的 `prometheus_tsdb_storage_blocks_bytes`
+只有 5.87GB（20Gi 的 27%），跟 Longhorn 回報的 112.6% 完全對不起來，代表問題
+不在 Prometheus 這邊。
+
+**原因**：直接查 Longhorn 自己的 CRD 才找到——
+
+```bash
+kubectl get volumes.longhorn.io <vol> -n longhorn-system -o jsonpath='{.status.actualSize}{"\n"}{.spec.size}{"\n"}'
+kubectl get snapshots.longhorn.io -n longhorn-system | grep <vol>
+```
+
+`spec.size` 確實是 20GiB，但 `status.actualSize` 是 22.5GiB——多出來的差額
+對應到一個**建立於 23 天前、之後從未清理過的 snapshot**（約 4GB）。Longhorn
+的 snapshot 是 block-level 的歷史快照，即使 live 資料已經因為 Prometheus 的
+15 天 retention 而輪替掉舊資料，舊 snapshot 仍然佔著那些歷史 block 不放，
+造成實際磁碟佔用比邏輯容量高。
+
+**解法**：確認不再需要這個 snapshot 後刪除即可釋放空間：
+
+```bash
+kubectl delete snapshots.longhorn.io -n longhorn-system <snapshot-name>
+```
+
+**狀態**：已定位根因，尚未清理（是否保留歷史快照屬於維運判斷，留給使用者
+決定）。這是 `add-business-metrics-and-alerting` 新增的
+`HomelabLonghornVolumeUsageHigh` 告警上線後幾分鐘內就抓到的第一個真實案例。
 
 ---
 
@@ -211,6 +248,122 @@ cluster 完全無關。minikube 本身的 profile 狀態也顯示異常（`unkno
 帶差異部分。
 
 **狀態**：已知限制，操作時注意，非 bug。
+
+**2026-07-29 更新：同一個坑又踩了一次**，這次是 `kube-prometheus-stack-values.yml`
+——從檔案裡拿掉一個壞掉的 `alertmanager.config` 區塊後，用 `--reuse-values` 重新
+`helm upgrade`，結果壞掉的舊設定還在（因為 `--reuse-values` 拿舊值當底疊加新檔案，
+不會因為新檔案沒有某個 key 就讓它消失）。修法跟上面完全一樣：改用讀出目前實際值
+（這裡是 `grafana.adminPassword`）再明確 `--set` 回去，取代 `--reuse-values`，
+不再依賴這個 flag 的合併行為。**這條本來就記錄過，這次是同一個錯誤犯了第二次**
+——之後改動任何用 `--reuse-values` 或類似「部分更新」邏輯的 playbook 前，先回來看
+這一段。見 `ansible/playbooks/update-prometheus-scrape-config.yml` 的修正。
+
+---
+
+<a name="job-radar-silent-failure"></a>
+## job-radar 告警 Runbook
+
+以下對應 `k8s` repo `apps/job-radar/prometheus-rules.yaml` 與
+`platform/prometheus-rules.yaml` 裡各條告警的 `runbook_url`。
+
+### JobRadarSourceSilent：某來源 6 小時內發現 0 筆新職缺
+
+**這是「回 200 但沒有資料」的靜默失敗**，所有基礎設施層指標（pod 健康、CPU、
+consumer lag）都會顯示正常，只有這條業務層告警看得到。
+
+1. 先查 Loki（`{namespace="job-radar",app="collector"}`）確認最近幾輪掃描的
+   結構化 log，看 `ScanService` 記的 `pages=` `jobsDiscovered=` 是否確實是 0
+2. 直接呼叫來源平台的 API（見 `docs/source-api-notes.md` 記錄的實際端點）確認
+   回應格式是否改變、或者是不是被 Cloudflare/WAF 擋掉但仍回 200
+3. 檢查 `search_queries` 表對應這個 source 的設定是否被意外改壞（關鍵字、篩選
+   條件）
+4. 如果排除以上都正常，等下一輪掃描；若持續超過 12 小時，視為平台端真的改版，
+   走 `add-multi-source-*` 的既有模式評估修復
+
+<a name="job-radar-scan-failures"></a>
+### JobRadarScanSuccessRateLow：過去 24 小時掃描成功率低於 95%（SLO-2）
+
+1. 查 collector 的結構化 log，`ScanService.runScan` 失敗時會記
+   `log.error("Scan failed source=... keyword=...", e)`，直接看 exception
+   訊息
+2. 常見原因：來源平台限速（429，`YouratorListScraper`/`CakeResumeListScraper`
+   的 `jobradar_scrape_retry_total` 應該同時會升高）、平台改版、網路問題
+3. 這條是 warning 不是 critical——95% 門檻本身就預留給外部平台的正常波動，
+   持續違反才需要介入，單次觸發可以先觀察
+
+<a name="job-radar-dlq"></a>
+### JobRadarDlqNotEmpty：DLQ topic 有訊息（critical）
+
+**代表資料正在遺失中，優先權最高。**
+
+1. `kubectl exec -n job-radar kafka-0 -- /opt/kafka/bin/kafka-console-consumer.sh
+   --bootstrap-server localhost:9092 --topic <topic> --from-beginning
+   --max-messages 5 --property print.headers=true` 直接看訊息的
+   `kafka_dlt-exception-message` header，通常就是根因
+2. **這個告警真實抓到過一次**：`jobs.events.dlq` 從 2026-07-22 左右開始累積，
+   一路到 207 筆都沒人發現，直到這條告警上線。根因是 `job-radar-discord`
+   這個 SealedSecret 解出來的值是字面上的 `"REPLACE_ME"`
+   （`secrets.example.yaml` 的 placeholder，從未被換成真的 webhook URL），
+   `DiscordNotifier` 對非法 URL 拋 `IllegalArgumentException: URI is not
+   absolute`。檢查方式：
+   ```bash
+   kubectl get secret job-radar-discord -n job-radar -o jsonpath='{.data.webhook-url}' | base64 -d
+   ```
+   如果印出來是 `REPLACE_ME`，就是這個問題——建立真的 Discord webhook，
+   比照 `apps/job-radar/discord-sealed-secret.yaml` 的做法重新 seal 一份
+3. 確認根因並修好後，DLQ 裡的訊息預設**不會自動重放**——需要手動把訊息從
+   `<topic>.dlq` 重新 produce 回 `<topic>`，或評估是否可以放棄那批訊息
+   （取決於資料的時效性）
+
+<a name="job-radar-pipeline-latency"></a>
+### JobRadarPipelineLatencySLOBurnFast / Slow：SLO-1 pipeline 延遲燃燒過快
+
+pipeline 正常是秒級（三跳 Kafka + 一次 HTTP），觸發代表真的塞住了：
+
+1. 先查 broker 端 consumer lag（`JobRadarConsumerLagGrowing` 是否也同時觸發）
+2. 查 Discord API 是否被限流（`jobradar_notification_total{result="failure"}`
+   是否升高、worker log 是否有 429 from discord.com）
+3. 查 collector 端是否被來源平台限速拖慢發現速度
+
+<a name="job-radar-discord-notification-failures"></a>
+### JobRadarNotificationFailureRateHigh：Discord 推播失敗率 > 10%
+
+跟 `JobRadarDlqNotEmpty` 經常一起觸發（見上面 DLQ 那條的真實案例），先查
+webhook URL 是否還有效，再查 Discord API 本身狀態。
+
+<a name="job-radar-consumer-lag"></a>
+### JobRadarConsumerLagGrowing：consumer lag 持續增長
+
+用的是 broker 端數據（kafka-exporter），不是 worker 自己回報的——worker 完全
+掛掉時也會觸發（client 端的 lag 指標在目前的程式碼結構下其實完全不存在，見
+`add-platform-observability` 的實測記錄）。先確認 worker pod 是否還在跑：
+
+```bash
+kubectl get pods -n job-radar -l app=worker
+kubectl logs -n job-radar -l app=worker --tail=50
+```
+
+<a name="job-radar-postgres-connections"></a>
+### JobRadarPostgresConnectionsHigh：連線數超過 80%
+
+`postgres` 的資源預算是 500m CPU / 512Mi，連線池設定不當很容易撞到這個上限。
+檢查 collector/worker/api 三個服務的 `spring.datasource.hikari` 設定，確認
+連線池大小總和沒有超過 `pg_settings_max_connections`。
+
+<a name="homelab-cert-expiring"></a>
+### HomelabCertificateExpiringSoon：憑證 30 天內到期
+
+cert-manager 應該會自動續期，這條是保險。查
+`kubectl get certificate -A` 確認對應憑證的 `READY`/`RENEWAL TIME` 狀態，
+`kubectl describe certificate <name> -n <ns>` 看續期有沒有報錯。
+
+<a name="homelab-argocd-outofsync"></a>
+### HomelabArgoCDAppOutOfSync：ArgoCD app 持續 OutOfSync 超過 15 分鐘
+
+`kubectl get application k8s-gitops -n argocd -o jsonpath='{.status.resources
+[?(@.status=="OutOfSync")]}'` 找出哪個資源不同步，確認是有人手動改了叢集
+（`selfHeal: true` 應該會自動修正回去，如果沒有代表 selfHeal 本身出問題）
+還是 sync 本身持續失敗（查 ArgoCD UI 的 sync 錯誤訊息）。
 
 ---
 
