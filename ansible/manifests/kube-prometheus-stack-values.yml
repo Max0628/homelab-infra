@@ -75,6 +75,26 @@ alertmanager:
             requests:
               storage: 2Gi
 
+    # 實際的 routing/receivers 改由 AlertmanagerConfig CRD 定義（見 k8s repo
+    # platform/alertmanager-config.yaml），不在這裡塞 raw alertmanager.config——
+    # 試過用 discord_configs.webhook_url_file 直接掛在這裡，
+    # kube-prometheus-stack-operator v0.92.1 自己 vendor 的 discordConfig
+    # struct 不認得這個欄位（"field webhook_url_file not found in type
+    # alertmanager.discordConfig"），reconcile 直接失敗。AlertmanagerConfig CRD
+    # 原生支援 secretKeyRef 拿 webhook URL，不會踩到這個限制，也更符合
+    # GitOps 慣例（CRD 資源歸 k8s repo 管，這裡只留 Helm bootstrap 的部分）。
+    #
+    # alertmanagerConfigMatcherStrategy 設 None：預設（OnNamespace）會自動幫
+    # 每個 AlertmanagerConfig 的 route 加上「只認自己所在 namespace」的隱性
+    # matcher，這樣 job-radar 的告警要放 job-radar namespace、Longhorn 的要放
+    # longhorn-system……最後變成到處都要重複定義同一個 discord receiver。
+    # 設 None 讓單一個 AlertmanagerConfig 物件可以吃下全叢集的告警，符合
+    # 「一個 homelab、一個 Discord channel」的實際需求。
+    alertmanagerConfigSelector: {}
+    alertmanagerConfigNamespaceSelector: {}
+    alertmanagerConfigMatcherStrategy:
+      type: None
+
   ingress:
     enabled: true
     ingressClassName: nginx

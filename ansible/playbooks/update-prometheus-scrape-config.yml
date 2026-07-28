@@ -9,9 +9,14 @@
 # 像 install-argocd.yml / install-platform.yml 那次沒 pin 版本、helm repo update
 # 拉到非預期新版的狀況重演。
 #
-# --reuse-values：這個 release 原本安裝時 grafana.adminPassword 是用 --set 帶入、
-# 不在這份 values 檔裡（見檔案開頭註解）。不加這個 flag，helm upgrade -f values.yml
-# 會把沒在檔案裡出現的既有設定重置回 chart 預設值，包含把 admin 密碼改掉。
+# 不用 --reuse-values：那個 flag 只會疊加新值，不會真的移除舊 release 裡存在、
+# 但這次從 values 檔案中刪掉的 key（實測踩過一次：從 values 檔拿掉
+# alertmanager.config 之後，--reuse-values 還是讓舊的、有問題的設定留在 release
+# 裡，因為它是拿舊值當底再疊加新檔案，不是完全用新檔案取代）。
+#
+# grafana.adminPassword 原本安裝時是用 --set 帶入、不在這份 values 檔裡（見檔案
+# 開頭註解），改用動態讀取目前的值再明確 --set 回去，取代 --reuse-values 的效果，
+# 但不會意外留住其他不想要的舊設定。
 
 - hosts: control_plane
   become: false
@@ -25,12 +30,21 @@
         src: ../manifests/kube-prometheus-stack-values.yml
         dest: /tmp/kube-prometheus-stack-values.yml
 
+    - name: Read current Grafana admin password
+      command: kubectl get secret kube-prometheus-stack-grafana -n monitoring -o jsonpath="{.data.admin-password}"
+      register: grafana_password_b64
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      changed_when: false
+      no_log: true
+
     - name: Upgrade kube-prometheus-stack with updated values
       command: >
         helm upgrade kube-prometheus-stack prometheus-community/kube-prometheus-stack
         --namespace monitoring
         --version {{ chart_version }}
-        --reuse-values
+        --set grafana.adminPassword={{ (grafana_password_b64.stdout | b64decode) | quote }}
         -f /tmp/kube-prometheus-stack-values.yml
       environment:
         KUBECONFIG: "{{ kubeconfig }}"
+      no_log: true
