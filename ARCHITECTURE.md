@@ -291,6 +291,32 @@ Kibana）的優勢是大規模全文搜尋和複雜聚合分析，這個專案�
 storage 選 filesystem（不是 S3-compatible object storage），都是因為規模小、沒有
 HA 需求，選最簡單的設定就好。
 
+### 平台服務的 metrics（job-radar `add-platform-observability` 追加，2026-07-28）
+
+以下皆由 job-radar 的 `add-platform-observability` change 補上，`k8s` repo 底下
+`platform/servicemonitors.yaml`（Longhorn／ingress-nginx／ArgoCD／cert-manager）
+與 `apps/job-radar/`（kafka-exporter／postgres_exporter）管理，ArgoCD 同步：
+
+| 元件 | 出口方式 | 補的東西 |
+|------|---------|---------|
+| ArgoCD | Helm values（`argocd-values.yml`）開啟 `controller/server/repoServer.metrics.enabled` | GitOps 同步狀態（`argocd_app_info`） |
+| ingress-nginx | Helm `--set controller.metrics.enabled=true` | frontend 真實使用者流量（D13：frontend 是唯一公開入口） |
+| cert-manager | 本來就有 metrics port，補 ServiceMonitor | 憑證到期天數 |
+| Longhorn | 本來就有 metrics port，補 ServiceMonitor | Volume 容量（已踩過坑，見 TROUBLESHOOTING.md） |
+| Kafka（job-radar 用） | `kafka-exporter`（danielqsj） | broker 端 consumer lag（client 端指標在目前 code 結構下完全不存在，見
+  job-radar `openspec/changes/add-platform-observability/design.md` 附錄） |
+| PostgreSQL（job-radar 用） | `postgres_exporter` | 連線數等標準指標 + `scrape_runs` 表聚合出的業務指標（Path A，不改 Java code） |
+
+`install-argocd.yml`／`install-platform.yml` 這兩支 playbook 原本用「已安裝就跳過」
+的 `helm install`，改成冪等的 `helm upgrade --install`，之後改 Helm values 才會真的
+套用，不會被無聲跳過。**兩者目前都沒有 pin chart 版本**，這次 apply 時 `helm repo
+update` 就順手把 ArgoCD chart 從 10.1.0 拉到 10.2.1——沒有造成問題，但這是已知的
+技術債，之後要避免非預期升級應該補上 `--version`。
+
+T480 host 本身另外裝了 node-exporter（`install-node-exporter.yml`），綁定在
+`192.168.100.1`（virbr1）、不綁 `0.0.0.0`，避免透過 tailscale0 對外暴露。
+Prometheus 端已用 `additionalScrapeConfigs` 接好（`update-prometheus-scrape-config.yml`）。
+
 ---
 
 ## Host 電源管理（TLP）
