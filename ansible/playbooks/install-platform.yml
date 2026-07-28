@@ -71,21 +71,13 @@
     - name: Update Helm repos
       command: helm repo update
 
-    - name: Check if ingress-nginx is installed
-      command: helm status ingress-nginx -n ingress-nginx
-      register: ingress_check
-      failed_when: false
-      changed_when: false
-      environment:
-        KUBECONFIG: "{{ kubeconfig }}"
-
-    - name: Install Nginx Ingress Controller
+    - name: Install or upgrade Nginx Ingress Controller
       command: >
-        helm install ingress-nginx ingress-nginx/ingress-nginx
+        helm upgrade --install ingress-nginx ingress-nginx/ingress-nginx
         --namespace ingress-nginx
         --create-namespace
         --set controller.service.type=LoadBalancer
-      when: ingress_check.rc != 0
+        --set controller.metrics.enabled=true
       environment:
         KUBECONFIG: "{{ kubeconfig }}"
 

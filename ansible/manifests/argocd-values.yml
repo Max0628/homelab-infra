@@ -32,3 +32,13 @@ server:
     annotations:
       cert-manager.io/cluster-issuer: homelab-ca-issuer
     tls: true
+  metrics:
+    enabled: true
+
+controller:
+  metrics:
+    enabled: true
+
+repoServer:
+  metrics:
+    enabled: true
