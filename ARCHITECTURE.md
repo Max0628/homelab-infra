@@ -317,6 +317,27 @@ T480 host 本身另外裝了 node-exporter（`install-node-exporter.yml`），�
 `192.168.100.1`（virbr1）、不綁 `0.0.0.0`，避免透過 tailscale0 對外暴露。
 Prometheus 端已用 `additionalScrapeConfigs` 接好（`update-prometheus-scrape-config.yml`）。
 
+### 告警路由（job-radar `add-business-metrics-and-alerting` 追加，2026-07-29）
+
+Alertmanager 原本的預設設定把**所有東西**（包含內建的 `Watchdog` dead man's
+switch）都路由到 `'null'` receiver——裝好 kube-prometheus-stack 以來沒有任何
+告警真的送達過任何地方。改用 `AlertmanagerConfig` CRD（`k8s` repo
+`platform/alertmanager-config.yaml`）接上單一 Discord catch-all receiver：
+
+- `alertmanagerConfigSelector: {}` + `alertmanagerConfigMatcherStrategy:
+  {type: None}`（見 `kube-prometheus-stack-values.yml`）：後者是關鍵，預設的
+  `OnNamespace` 策略會自動幫每個 `AlertmanagerConfig` 的 route 加上「只認自己
+  所在 namespace」的隱性 matcher，設 `None` 才能讓一個物件涵蓋全叢集
+- severity=critical 走更快的 group_wait/interval/repeat_interval
+- `Watchdog` 改路由到同一個 receiver、repeat_interval 拉到 24h，變成真正的
+  dead man's switch（收不到這則心跳超過一天，代表監控系統本身可能已經掛了）
+
+webhook URL 待使用者填入真的值（`platform/alertmanager-discord-sealed-secret.yaml`
+目前是 placeholder），詳見 job-radar `add-business-metrics-and-alerting/design.md`
+附錄——過程中還踩到 kube-prometheus-stack-operator 對 `discord_configs.
+webhook_url_file` 缺乏支援、以及 AlertmanagerConfig 要求 secret 值本身要是
+合法 URL 格式才會被接受這兩個版本相關的限制。
+
 ---
 
 ## Host 電源管理（TLP）
