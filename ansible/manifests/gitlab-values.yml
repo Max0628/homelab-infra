@@ -42,6 +42,15 @@ redis:
 
 postgresql:
   install: true
+  # 官方 chart 預設 250m，是給有實際多人並發連線量的場景設計的。實測（2026-07-29）
+  # 這個 homelab 只有一人在用，過去 30 分鐘平均只用 28m，調到 100m 還留 3 倍以上安全
+  # 邊際。這裡只有 requests（沒設 limits），調低不影響 GitLab 實際能拿到多少 CPU，
+  # 只影響 k8s 排程器登記的保底值——三個節點目前 CPU request 帳面 83~97%、實際用量
+  # 只有 34%，帳面超賣正是 add-distributed-tracing 排不進去的主因。
+  primary:
+    resources:
+      requests:
+        cpu: 100m
 
 gitlab:
   gitlab-shell:
@@ -50,9 +59,53 @@ gitlab:
   webservice:
     minReplicas: 1
     maxReplicas: 1
+    # 2026-07-29：試過調低 CPU request（150m、250m 都試過），新 pod 開機時連續
+    # 被 liveness probe 判定沒開機完就砍掉，還原回 chart 預設 300m。
+    resources:
+      requests:
+        cpu: 300m
+    # 2026-07-29 第二次調整：worker1 加 vCPU 後整台重開機，47 個 pod 同時冷啟動
+    # （JVM 編譯、Longhorn 重建 replica…），node 陷入短暫的排隊風暴（load average
+    # 一度到 30+），Rails preload 被拖慢到超過 chart 預設 liveness 容忍時間
+    # （initialDelaySeconds 20 + failureThreshold 3 * periodSeconds 60 ≈ 170s），
+    # 每次被砍掉都重置 preload 進度，形成打不完的 crash loop——跟 sidekiq 當初
+    # 那次同一個模式（開機期間需要的時間 >> 穩態），只是這次觸發原因是 node
+    # 級的搶資源风暴，不是把 CPU request 調低。只拉長 failureThreshold（不動
+    # CPU request），維持跟 300m/100m 一致，不會再重演之前排程卡住的問題。
+    # 2026-07-29 修正：webservice 這個 subchart 的 probe 路徑跟 sidekiq 不一樣，
+    # 是巢狀在 deployment 底下（sidekiq 是扁平的 gitlab.sidekiq.livenessProbe），
+    # 第一次套用時放錯路徑（gitlab.webservice.livenessProbe），helm 把它當成
+    # 一個沒用到的多餘 key 合併進去，實際 Deployment 用的還是 chart 預設
+    # failureThreshold 3，完全沒生效——同一時間風暴又持續加劇，變成 CrashLoopBackOff。
+    deployment:
+      livenessProbe:
+        initialDelaySeconds: 20
+        periodSeconds: 60
+        timeoutSeconds: 30
+        failureThreshold: 6
   sidekiq:
     minReplicas: 1
     maxReplicas: 1
+    # 同上，還原回 chart 預設 900m
+    resources:
+      requests:
+        cpu: 900m
+    # sidekiq 的 chart 沒有支援 startupProbe（範本沒接這個機制，webservice 有但
+    # 沒用，見上方說明保持一致），只能拉長 liveness probe 本身的容忍時間，原理
+    # 跟 webservice 那段一樣
+    livenessProbe:
+      initialDelaySeconds: 90
+      periodSeconds: 60
+      timeoutSeconds: 30
+      failureThreshold: 5
+  gitaly:
+    # gitaly 是 StatefulSet，更新策略跟 webservice/sidekiq（Deployment，有
+    # surge，會新舊世代同時存在搶資源）不同，是新舊一比一直接替換，不會有
+    # 上面那種多世代搶資源的狀況。實測部署後全程穩定（0 restart），保留這個
+    # 調降。chart 預設 100m，實測平均只用 ~9m，調到 50m 留 5 倍以上邊際
+    resources:
+      requests:
+        cpu: 50m
   kas:
     enabled: false
   toolbox:

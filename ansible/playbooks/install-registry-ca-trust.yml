@@ -1,0 +1,50 @@
+---
+# job-radar 前置作業（見 job-radar/docs/architecture.md「前置作業」章節）：
+# containerd 在拉 registry.192.168.100.200.nip.io 的 image 時，TLS 憑證鏈要能驗證，
+# 但目前只有 install-ca.yml 把 Root CA 發給 iPhone/Mac，三個 k8s 節點的系統信任庫
+# 沒有這張 CA，containerd 會因為憑證不受信任而 pull image 失敗。
+#
+# 這個 playbook 把 cert-manager 簽發的 homelab Root CA 裝進三個節點的系統信任庫
+# （沿用 install-ca.yml 抓 CA 的方式，不依賴它先手動跑過），並重啟 containerd 讓它生效。
+
+- name: Fetch homelab Root CA certificate
+  hosts: control_plane
+  become: false
+  vars:
+    kubeconfig: /home/ubuntu/.kube/config
+
+  tasks:
+    - name: Extract Root CA public certificate from cert-manager secret
+      shell: kubectl get secret homelab-root-ca-secret -n cert-manager -o jsonpath="{.data['ca\.crt']}" | base64 -d
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: root_ca_cert
+      changed_when: false
+
+    - name: Save Root CA cert locally for distribution to all nodes
+      local_action:
+        module: copy
+        content: "{{ root_ca_cert.stdout }}"
+        dest: /tmp/homelab-root-ca.crt
+
+- name: Trust homelab Root CA on all k8s nodes and reload containerd
+  hosts: control_plane:workers
+  become: true
+
+  tasks:
+    - name: Copy Root CA cert into system trust anchors
+      copy:
+        src: /tmp/homelab-root-ca.crt
+        dest: /usr/local/share/ca-certificates/homelab-root-ca.crt
+        mode: '0644'
+      register: ca_copy
+
+    - name: Refresh system CA bundle
+      command: update-ca-certificates
+      when: ca_copy.changed
+
+    - name: Restart containerd to pick up updated CA trust
+      systemd:
+        name: containerd
+        state: restarted
+      when: ca_copy.changed

@@ -39,16 +39,16 @@
       command: kubectl rollout status deployment/cert-manager -n cert-manager --timeout=120s
       environment:
         KUBECONFIG: "{{ kubeconfig }}"
-
-    - name: Copy selfsigned ClusterIssuer manifest
-      copy:
-        src: ../manifests/selfsigned-issuer.yml
-        dest: /tmp/selfsigned-issuer.yml
-
-    - name: Apply selfsigned ClusterIssuer
-      command: kubectl apply -f /tmp/selfsigned-issuer.yml
-      environment:
-        KUBECONFIG: "{{ kubeconfig }}"
+    # 2026-07-29：拿掉「Copy/Apply selfsigned ClusterIssuer」兩個 task。
+    # selfsigned-issuer 這個 ClusterIssuer 是這個 playbook 第一次跑成功時
+    # (998b398) 建立的，後來內部 CA 重構 (dd6138d) 改用 homelab-ca-issuer
+    # 統一簽發（見 install-ca.yml + manifests/homelab-ca-issuer.yml），來源
+    # manifest 檔案 selfsigned-issuer.yml 當時被移除，但這兩個 task 沒有跟著
+    # 清掉，變成每次重跑都在找一個不存在的檔案而整個 playbook fail。實測
+    # GitLab 目前所有 ingress（gitlab-minio/gitlab-registry/gitlab-webservice-
+    # default）都沒有 cert-manager.io/cluster-issuer annotation，靠既有的
+    # gitlab-wildcard-tls secret，selfsigned-issuer 這個 ClusterIssuer 資源
+    # 本身仍留在叢集內（26 天前建立的，沒人用也沒人刪，無害但也無用）。
 
 
 - name: Install GitLab CE
@@ -109,22 +109,13 @@
         src: ../manifests/gitlab-values.yml
         dest: /tmp/gitlab-values.yml
 
-    - name: Check if GitLab is installed
-      command: helm status gitlab -n gitlab
-      register: gitlab_check
-      failed_when: false
-      changed_when: false
-      environment:
-        KUBECONFIG: "{{ kubeconfig }}"
-
-    - name: Install GitLab (this takes 10-15 minutes)
+    - name: Install or upgrade GitLab (this takes 10-15 minutes on first install)
       command: >
-        helm install gitlab gitlab/gitlab
+        helm upgrade --install gitlab gitlab/gitlab
         --namespace gitlab
         --version 9.11.7
         --timeout 900s
         -f /tmp/gitlab-values.yml
-      when: gitlab_check.rc != 0
       environment:
         KUBECONFIG: "{{ kubeconfig }}"
 
