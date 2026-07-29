@@ -203,8 +203,17 @@ fi
 | 節點 | 角色 | IP | vCPU | RAM | Disk |
 |------|------|----|------|-----|------|
 | k8s-control | control plane | 192.168.100.10 | 2 | 4GB | 50GB |
-| k8s-worker1 | worker | 192.168.100.11 | 2 | 20GB | 200GB |
+| k8s-worker1 | worker | 192.168.100.11 | 3 | 20GB | 200GB |
 | k8s-worker2 | worker | 192.168.100.12 | 2 | 20GB | 200GB |
+
+worker1 的 vCPU 在 2026-07-29 從 2 調到 3（`terraform apply`，destroy+recreate VM
+domain，disk 保留、IP 不變）：host 是 i5-8350U（4 核 8 執行緒），三台 VM 原本
+2+2+2=6，這次只加 worker1 一台到 3（總和 7），刻意留 1 個執行緒給 host。跟下面
+「Host 電源管理（TLP）」章節當初的判斷不同——那時候的結論是「不在 terraform 層調
+vCPU」，這次翻案的原因是：當初是考慮調低（省電、減少排程帳本超賣），這次是調高
+（給 `add-distributed-tracing` 的 Tempo 需要的真實 CPU headroom），vCPU 數量對
+k8s 排程帳本是加分不會出問題，跟調低时的 `OutOfcpu`/`Pending` 風險方向相反。TLP
+的降頻設定跟這個維度完全獨立，兩者不衝突。
 
 worker 磁碟原本各 120GB，因為 host 實際還有大量剩餘空間（466GB 中大部分未用），
 在線上活體擴容到 200GB：`virsh blockresize`（qcow2 層）+ `growpart`（分割區層）+
@@ -280,9 +289,10 @@ Promtail             Prometheus
 |------|------|------|
 | Prometheus | kube-prometheus-stack chart 87.6.0 | Metrics 收集與儲存（retention 15 天） |
 | AlertManager | 同上 bundle | 告警規則與通知（Discord） |
-| Grafana | 同上 bundle | Dashboard 視覺化，已接上 Prometheus + Loki 兩個 datasource |
+| Grafana | 同上 bundle | Dashboard 視覺化，已接上 Prometheus + Loki + Tempo 三個 datasource |
 | Loki | chart 7.0.0 | Log 收集與查詢，SingleBinary 部署模式、storage 用 filesystem |
 | Promtail | chart 6.17.1 | Log 收集 agent（每個節點的 DaemonSet） |
+| Tempo | chart 1.24.4（`grafana/tempo`，官方已標記 deprecated，功能仍正常，導向的 `tempo-distributed` 之後再評估遷移） | 分散式追蹤儲存，SingleBinary + filesystem storage 10Gi（決策比照 Loki），2026-07-29 裝，見下方獨立章節 |
 
 **為什麼是 Loki 不是 ELK**：Loki 對目前這種規模的 k8s log（namespace 數量少、log
 量小）已經夠用，設定和資源消耗都比 ELK 輕很多。ELK（Elasticsearch / Logstash /
@@ -337,6 +347,45 @@ webhook URL 待使用者填入真的值（`platform/alertmanager-discord-sealed-
 附錄——過程中還踩到 kube-prometheus-stack-operator 對 `discord_configs.
 webhook_url_file` 缺乏支援、以及 AlertmanagerConfig 要求 secret 值本身要是
 合法 URL 格式才會被接受這兩個版本相關的限制。
+
+### GitLab CPU 調整、worker1 加 vCPU、裝 Tempo（2026-07-29）
+
+**GitLab CPU request 右調**：GitLab chart 預設的 CPU request（webservice 300m、
+sidekiq 900m、postgresql 250m、gitaly 100m）是給有實際多人並發連線量的場景設計
+的，這個 homelab 只有一人在用，是三個節點 CPU request 帳面 83~97%（實際用量只有
+34%）的主因，也是當初 `add-distributed-tracing` 排不進去的關鍵瓶頸。實測後把
+postgresql 降到 100m、gitaly 降到 50m（皆穩定 0 restart，StatefulSet 更新策略是
+1:1 直接替換，不會有新舊世代同時搶資源的問題）。webservice/sidekiq 嘗試調低時
+在 pod 開機階段被 liveness probe 判定沒開機完就砍掉，形成 crash loop——**開機期間
+需要的 CPU 遠大於穩態平均用量**，是這類 Ruby/Rails 應用調資源時容易忽略的陷阱，
+最後兩者都還原回 chart 預設值，只針對 sidekiq 延長 liveness probe 容忍時間
+（`initialDelaySeconds 90 / periodSeconds 60 / timeoutSeconds 30 /
+failureThreshold 5`）。
+
+**worker1 加 vCPU（2→3）**：見上方「節點規格」章節。加完後全節點冷開機引發一次
+連鎖效應：47 個 pod 同時搶資源的開機風暴殃及跑在 worker2 上的 GitLab webservice
+（不是 worker1，那次的重開機只影響 worker1 本身），也陷入同一種 crash loop。
+比照 sidekiq 的修法延長 webservice 的 liveness probe，但**這個 subchart 的 probe
+路徑是巢狀在 `gitlab.webservice.deployment.livenessProbe`**（sidekiq 是扁平的
+`gitlab.sidekiq.livenessProbe`），第一次套用時路徑放錯，helm 把它當成沒用到的
+多餘 key，完全沒生效，直到改到正確路徑才修好——修好後新 pod 剛好排到剛加了
+vCPU、空閒的 worker1，穩定跑起來。
+
+**worker2 CA trust 缺口**：風暴期間 job-radar 的 frontend pod 一直
+`ImagePullBackOff`，查出跟前面兩個問題無關的獨立缺口——worker2 的 containerd
+系統信任庫從來沒裝過 homelab 內部 Root CA（control/worker1 都有），拉 image 時
+TLS 驗證失敗（`x509: certificate signed by unknown authority`）。跑
+`install-registry-ca-trust.yml`（把 cert-manager 簽發的 Root CA 裝進三個節點
+系統信任庫、重啟 containerd）補上，只有 worker2 真的有變化。
+
+**Tempo 安裝**：見上方「Observability Stack」表格。過程踩了兩個坑：chart 自動
+生成的 ServiceMonitor 沒帶 `release: kube-prometheus-stack` label（跟 job-radar
+一開始遇到的 ServiceMonitor label-matching 問題同一個根因）；Grafana
+`additionalDataSources` 幫既有 25 天的 Loki datasource 指定 `uid: loki` 會導致
+整個 provisioning 失敗（這個 Grafana 版本的 unified storage/apiserver
+provisioning 路徑不允許改動既有 datasource 的 uid），改用 Loki 原本自動產生的
+uid 做雙向 trace↔log 交叉引用。job-radar 的 Micrometer Tracing OTLP 之後直接指向
+`tempo.monitoring.svc.cluster.local:4317` 即可接上。
 
 ---
 

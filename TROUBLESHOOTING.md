@@ -37,6 +37,41 @@ libvirt domain destroy + recreate（改 `vcpu` 這個屬性在這個 provider �
 
 ---
 
+### 加 vCPU 觸發全節點冷開機風暴，殃及別的節點上的服務
+
+**症狀**：2026-07-29 把 worker1 的 vCPU 從 2 調到 3（`terraform apply`，
+destroy+recreate VM domain），worker1 本身重開機後 47 個 pod 同時搶資源，
+load average 一度衝到 30+（3 vCPU 的機器）。幾分鐘後**跑在 worker2 上的**
+GitLab webservice 也跟著陷入 crash loop（`Liveness probe failed`），ArgoCD
+的 `argocd-repo-server`（同樣在 worker2）也一起 crash loop 了 10 小時。
+
+**原因**：Longhorn volume 的多副本重建、跨節點的排程重新平衡等連鎖效應，讓
+「只重開機一個節點」的影響擴散到其他節點，不是只有被重開機的那台會受影響。
+GitLab webservice（Ruby/Rails）boot 期間需要的 CPU 遠大於穩態平均用量，在
+worker2 額外承受這波風暴的情況下，Rails preload 被拖慢到超過 chart 預設
+liveness probe 的容忍時間（`initialDelaySeconds 20 + failureThreshold 3 *
+periodSeconds 60 ≈ 170s`），每次被 liveness 砍掉重開都重置 preload 進度，
+形成打不完的 crash loop——跟同一份 `gitlab-values.yml` 之前 sidekiq CPU
+right-size 那次遇到的模式完全一樣（開機期間需要的資源 >> 穩態），只是這次
+觸發原因是 node 級的資源风暴，不是把 CPU request 調低。
+
+**解法**：比照 sidekiq 延長 webservice 的 liveness probe 容忍時間。**踩了一個
+額外的坑**：webservice 這個 subchart 的 probe 路徑跟 sidekiq 不一樣，是巢狀在
+`gitlab.webservice.deployment.livenessProbe`（sidekiq 是扁平的
+`gitlab.sidekiq.livenessProbe`），第一次直接照抄 sidekiq 的扁平路徑放到
+`gitlab.webservice.livenessProbe`，helm 把它當成沒用到的多餘 key 合併進去，
+實際 Deployment 用的還是 chart 預設，完全沒生效。用
+`helm get values -a -o yaml` 撈出完整合併後的值、比對 chart 預設結構，才找到
+正確路徑。改對之後新 pod 剛好排到剛加了 vCPU、已經閒下來的 worker1，順利穩定。
+`argocd-repo-server` 沒有另外處理，風暴退去後自己恢復。
+
+**狀態**：已解決。`ansible/manifests/gitlab-values.yml`
+`gitlab.webservice.deployment.livenessProbe` 現在跟 sidekiq 一樣有延長過的
+probe 設定。日後再調 vCPU（不論哪個節點），都要預期「重開機期間的風暴會透過
+Longhorn/排程連鎖影響到其他節點」，不能只看被改動的那台。
+
+---
+
 ## 網路（Tailscale / libvirt / MetalLB）
 
 ### Mac 經 Tailscale 連 k8s VIP 出現 `ERR_CONNECTION_REFUSED`
@@ -260,6 +295,70 @@ cluster 完全無關。minikube 本身的 profile 狀態也顯示異常（`unkno
 
 ---
 
+## Observability（ServiceMonitor / Grafana provisioning）
+
+### worker2 的 containerd 從沒信任過內部 Root CA
+
+**症狀**：2026-07-29，job-radar 的 frontend pod 一直 `ImagePullBackOff`，錯誤是
+`x509: certificate signed by unknown authority`，但同一批的 api/collector/
+worker pod（排到別的節點）都正常。
+
+**原因**：內部 PKI（`install-ca.yml` + `homelab-ca-issuer.yml`）建立的時候，只
+把 Root CA 憑證裝進了手機/Mac 的信任清單，沒有同步裝進三個 k8s 節點自己的系統
+信任庫（`update-ca-certificates`）。control 和 worker1 不知何時已經有了，只有
+worker2 一直缺，containerd 拉 registry image 時驗證 TLS 鏈失敗。
+
+**解法**：`ansible/playbooks/install-registry-ca-trust.yml`（本來就寫好但沒
+執行過）——從 cert-manager 的 secret 撈出 Root CA 公鑰，裝進三個節點的
+`/usr/local/share/ca-certificates/`，`update-ca-certificates` 後重啟
+containerd。
+
+**狀態**：已解決。這個 playbook 現在應該視為叢集初始化的必要步驟之一，不是
+可選項——任何新增/重建的節點都要跑一次。
+
+### chart 自動生成的 ServiceMonitor 沒帶 `release` label，Prometheus 選不到
+
+**症狀**：裝 Tempo（`grafana/tempo` chart）並開啟 `serviceMonitor.enabled:
+true` 後，Prometheus 的 target 清單裡找不到 tempo。
+
+**原因**：跟 job-radar 最早遇到的 ServiceMonitor 問題同一個根因——
+kube-prometheus-stack 的 `Prometheus` CR 只認帶有 `release:
+kube-prometheus-stack` label 的 ServiceMonitor（`serviceMonitorSelector`），
+chart 自動生成的 ServiceMonitor 只有自己的 `app.kubernetes.io/*` label，不會
+自動帶上這個。
+
+**解法**：`serviceMonitor.additionalLabels: {release: kube-prometheus-stack}`
+（大多數 Grafana 系 chart 都有這個欄位）。**這是一個會反覆出現的模式**：之後
+任何用 helm chart 裝、chart 自帶 ServiceMonitor 的元件，安裝後都要先確認這個
+label 有沒有正確帶上，不要預設它會自動生效。
+
+**狀態**：已解決，見 `ansible/manifests/tempo-values.yml`。
+
+### Grafana provisioning 幫既有 datasource 硬塞 uid 會讓整個 provisioning 失敗
+
+**症狀**：在 `kube-prometheus-stack-values.yml` 的
+`grafana.additionalDataSources` 裡幫既有的 Loki datasource（25 天前建立，
+uid 是當初自動產生的亂碼）額外指定 `uid: loki`，`helm upgrade` 後 Grafana 完全
+沒套用新設定（連同一批新增的 Tempo 一起消失），重啟 pod 也沒用。
+
+**原因**：`kubectl logs` 顯示 `"Failed to provision data sources" error="data
+source not found"`。這個 Grafana 版本的 provisioning 走新的 unified
+storage/apiserver 路徑，不允許透過檔案 provisioning 改動既有 datasource 的
+uid（也合理——強改會讓既有 dashboard/Explore 裡存的查詢跟 datasource 對不上）。
+另外還連帶踩到一個順序問題：`additionalDataSources` 清單裡如果 A 用
+`jsonData` 交叉引用 B 的 uid（例如 Loki 的 `derivedFields` 指向 Tempo），B 必須
+排在 A 前面，不然同一輪 provisioning 處理到 A 時 B 還不存在，一樣會整個失敗。
+
+**解法**：兩點都要注意——(1) 對既有 datasource 不要在 provisioning 檔案裡另外
+指定 `uid`，用 Grafana API（`/api/datasources`）查出它原本的 uid，直接拿來用；
+(2) 清單裡有交叉引用時，被引用的那個要排前面。
+
+**狀態**：已解決，見 `ansible/manifests/kube-prometheus-stack-values.yml` 裡
+Tempo 排在 Loki 前面、Loki 的 `tracesToLogsV2.datasourceUid` 用原本 uid 的
+註解說明。
+
+---
+
 <a name="job-radar-silent-failure"></a>
 ## job-radar 告警 Runbook
 
@@ -371,14 +470,14 @@ cert-manager 應該會自動續期，這條是保險。查
 
 ### `kube-system` 裡有孤兒 coredns pod
 
-`coredns-668d6bf9bc-svpv6` 卡在 `ContainerStatusUnknown`，是 control-plane 那
-次 VM destroy + recreate 留下的孤兒 pod 物件（新 VM 的 kubelet 不認得舊的
-container runtime 狀態）。跟任何目前的服務問題無關，純粹是殘留物件，之後找時間
-清掉即可：
+**狀態**：已解決（2026-07-29）。`kubectl describe` 顯示真正原因跟原先猜測的
+「VM destroy+recreate 留下的孤兒物件」不同，是 `Status: Failed, Reason:
+UnexpectedAdmissionError`，訊息裡的 `no set of running pods found to reclaim
+resources: [(res: cpu, q: 100)]` 顯示這其實是上面「vCPU 調太低導致 CPU request
+超賣」那次事件的殘留產物（ReplicaSet 想擴一個新副本但排程器找不到可搶的資源，
+留下一個 Failed 狀態的 pod 物件，沒有被自動 GC 掉）。已有 2 個健康副本頂著，
+純粹清垃圾：
 
 ```bash
 kubectl delete pod -n kube-system coredns-668d6bf9bc-svpv6
 ```
-
-**狀態**：待處理（優先度低，不影響任何服務，deployment 會自動維持正確的
-replica 數量）。
