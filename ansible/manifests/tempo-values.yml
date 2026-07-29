@@ -1,0 +1,33 @@
+# grafana/tempo chart 本身就是 single-binary 形態的鏈路追蹤後端（沒有像 Loki
+# 那樣的 deploymentMode 開關，microservices 模式是另一個獨立的 tempo-distributed
+# chart），部署決策比照既有的 Loki：規模小、無 HA 需求、filesystem storage、
+# 選最簡單的設定（見 homelab-infra/ARCHITECTURE.md「為什麼是 Loki 不是 ELK」）。
+
+tempo:
+  # chart 預設 retention 24h，跟 Loki 目前的實際 retention 一樣（皆未特別覆寫，
+  # 沿用各自 chart 預設），homelab 規模先用這個，之後有需要再調
+  retention: 24h
+
+  # 刻意不設定 requests/limits，比照 loki-values.yml 的作法：這個 homelab 目前
+  # CPU request 帳面超賣（GitLab 預設值就是主因，見 gitlab-values.yml 的說明）
+  # 才是真正瓶頸，不是實際用量。不设 request 讓 Tempo 用 Burstable QoS、CPU
+  # shares 最低優先權去搶剩餘算力，不會再往帳面超賣的問題上疊加一筆。
+  resources: {}
+
+  # otlp receiver（grpc 4317 / http 4318）是 chart 預設就開啟的，job-radar 的
+  # Micrometer Tracing 之後直接指向 tempo.monitoring.svc.cluster.local:4317 即可，
+  # 其餘 jaeger/opencensus receiver 用不到但保留預設沒差（沒流量進來不耗資源）
+
+persistence:
+  enabled: true
+  storageClassName: longhorn
+  size: 10Gi
+
+serviceMonitor:
+  enabled: true
+  # kube-prometheus-stack 的 Prometheus CR 只認 release: kube-prometheus-stack
+  # 這個 label 的 ServiceMonitor（見 kube-prometheus-stack-values.yml 裡沒動過的
+  # 預設 serviceMonitorSelector），chart 自動生成的 ServiceMonitor 預設沒帶這個
+  # label，跟 session 一開始 job-radar 遇到的 label-matching 問題同一個根因
+  additionalLabels:
+    release: kube-prometheus-stack

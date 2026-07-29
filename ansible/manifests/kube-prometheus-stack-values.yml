@@ -23,12 +23,43 @@ grafana:
     size: 5Gi
 
   additionalDataSources:
+    # 2026-07-29：Tempo 排在 Loki 前面，不是隨意順序——Loki 的 derivedFields
+    # 交叉引用 datasourceUid: tempo，Grafana 這個版本的 provisioning（新的
+    # unified storage/apiserver 路徑）依序處理清單，Tempo 沒先建立的話處理到
+    # Loki 這筆會直接整個 provisioning 失敗（"data source not found"），連
+    # Prometheus/Alertmanager 都吃不到新設定，Grafana 卡在舊資料，重開機也沒用。
+    - name: Tempo
+      type: tempo
+      uid: tempo
+      access: proxy
+      url: http://tempo.monitoring.svc.cluster.local:3200
+      isDefault: false
+      editable: false
+      jsonData:
+        tracesToLogsV2:
+          # Loki 是 25 天前就建立的既有 datasource，Grafana 這個版本的
+          # provisioning 不會改動既有 datasource 的 uid（強改會跟 dashboard/
+          # Explore 裡已經存的查詢引用對不上），沿用它原本自動產生的 uid，
+          # 不透過 additionalDataSources 幫它另外指定 uid: loki
+          datasourceUid: P8E80F9AEF21F6940
+          spanStartTimeShift: "-5m"
+          spanEndTimeShift: "5m"
+          filterByTraceID: true
     - name: Loki
       type: loki
       access: proxy
       url: http://loki.monitoring.svc.cluster.local:3100
       isDefault: false
       editable: false
+      jsonData:
+        # Micrometer Tracing 的 Logback 整合預設把 traceId 放進 MDC 的 traceId
+        # 欄位（standard convention，job-radar 尚未接上 tracing 前這條規則不會
+        # 命中任何 log，先接上等 add-distributed-tracing 的 Java 端補完就直接生效）
+        derivedFields:
+          - datasourceUid: tempo
+            matcherRegex: '"traceId":"(\w+)"'
+            name: TraceID
+            url: "${__value.raw}"
 
 prometheus:
   prometheusSpec:
