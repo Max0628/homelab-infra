@@ -1,4 +1,4 @@
-gitlabUrl: https://gitlab.192.168.100.200.nip.io
+gitlabUrl: https://gitlab.tashuchiu.online
 
 # runnerToken 不進版控，helm install/upgrade 時用 --set runnerToken=... 帶入
 

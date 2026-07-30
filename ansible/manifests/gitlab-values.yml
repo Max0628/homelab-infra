@@ -6,6 +6,18 @@ global:
     https: true
     externalIP: 192.168.100.200
     ssh: gitlab.192.168.100.201.nip.io
+    # 2026-07-30：GitLab 公開曝露到 tashuchiu.online（Cloudflare Tunnel）之後，
+    # 只換網頁登入這個子服務的 canonical hostname，registry/minio 仍沿用
+    # domain 產生的內網網址，不受影響（見 webservice ingress.yaml 的
+    # `global.hosts.gitlab.hostnameOverride | default (gitlab.gitlab.hostname)`
+    # 這條 fallback 邏輯）。實測發現：這個值不只影響 Ingress 物件的 host，
+    # 也連帶決定 GitLab 自己 Rails 端認定的 external_url——如果瀏覽器訪問的
+    # 網址跟這裡設定的不一致，GitLab 前端會偵測到 canonical URL 不符，
+    # 陷入 /users/sign_in 無限重新整理的迴圈（不是網路層問題，之前誤以為是
+    # cookie/TLS 沒設好，兩者都要一起處理才會真的正常）。使用者決定只保留
+    # 外部網址，原本的 .nip.io 內網登入之後不再保證能用。
+    gitlab:
+      hostnameOverride: gitlab.tashuchiu.online
 
   ingress:
     class: nginx
