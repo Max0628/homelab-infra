@@ -31,6 +31,14 @@ global:
     # 動 domain 或 hostnameOverride，registry 自己的 hostname 維持內網不變。
     gitlab:
       hostnameOverride: gitlab.tashuchiu.online
+    # 2026-08-01 三度更正：前兩次分別用了 registry: hostname:（不存在的 key，
+    # 對 registry 子圖表沒作用）跟後來才發現真正決定 registry Ingress host
+    # 的是這裡——global.hosts.registry.name（見 charts/registry/templates/
+    # _helpers.tpl 第 22 行：coalesce .Values.global.hosts.registry.name ...）。
+    # 跟上面 gitlab.hostnameOverride 是同一層級的 global.hosts.<service> 命名
+    # 慣例，只是 registry 子圖表用的是 `.name` 不是 `.hostnameOverride`。
+    registry:
+      name: registry.tashuchiu.online
 
   ingress:
     class: nginx
@@ -145,10 +153,6 @@ registry:
   # 明確覆蓋，否則預設會退回內網舊網址（現在已經 404）。只影響「跟 GitLab
   # 換 token」這個動作打去哪裡，跟 registry 本身的 hostname 無關。
   authEndpoint: https://gitlab.tashuchiu.online
-  # 2026-08-01：配置 registry hostname 為外網公開域名，透過 Cloudflare Tunnel
-  # 的 wildcard 指向 ingress-nginx，使得內外網都能訪問 registry.gitlab.tashuchiu.online。
-  # Pod 從此改用外網域名拉取鏡像，不再受限於內網 .nip.io 地址無法訪問的問題。
-  hostname: registry.tashuchiu.online
 
 # dummy email 讓 certmanager-issuer sub-chart 通過 schema 驗證
 certmanager-issuer:
