@@ -8,8 +8,22 @@
 # SNI=gitlab.tashuchiu.online / registry.tashuchiu.online 對不到這張憑證的
 # SAN，ingress-nginx 退回預設的 fake cert，TLS handshake 直接失敗——這正是
 # GitLab Runner 內部路徑（見 gitlab-runner-values.yml host_aliases）跟 image
-# pull 內部路徑會失敗的根因。新增這兩個網域，舊的 .nip.io 名稱保留不動
-# （沒有任何東西還在用，但拿掉也沒有實質好處，不做非必要的變更）。
+# pull 內部路徑會失敗的根因。
+#
+# 2026-08-02 二次更正：光補 SAN 不夠——GitLab Runner 的 Kubernetes executor
+# 有已知限制，不會把 certsSecretName 掛的自訂 CA 傳給每次任務動態產生的 job
+# pod（見 GitLab Issue #3715），checkout/artifact 上傳這兩步因此還是無法信任
+# homelab-ca-issuer 簽的私有憑證。改用 letsencrypt-issuer.yml 新增的公開 CA
+# （Let's Encrypt，透過 Cloudflare DNS-01 驗證），job pod 用預設信任清單就能
+# 直接驗證通過，不需要任何自訂信任設定，從根本繞開這個限制。
+#
+# 先切 letsencrypt-staging 測試 DNS-01 流程能不能跑通（簽發沒有嚴格次數限制，
+# 但簽出來的憑證不受信任，只能檢查簽發是否成功，不能拿來驗證真實連線），
+# 確認沒問題後再切 letsencrypt-prod。
+#
+# dnsNames 拿掉 .nip.io 那三個——Let's Encrypt 用 DNS-01 驗證網域所有權，
+# nip.io 是別人的網域，我們沒有那邊的 DNS 控制權，簽不出來，而且已確認
+# 沒有任何東西還在用這些舊名稱。
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -20,10 +34,7 @@ spec:
   dnsNames:
     - gitlab.tashuchiu.online
     - registry.tashuchiu.online
-    - gitlab.192.168.100.200.nip.io
-    - registry.192.168.100.200.nip.io
-    - minio.192.168.100.200.nip.io
   issuerRef:
-    name: homelab-ca-issuer
+    name: letsencrypt-staging
     kind: ClusterIssuer
     group: cert-manager.io
