@@ -1,0 +1,33 @@
+---
+# gitlab-certificate.yml 原本是手動 kubectl apply 上去的，沒有對應的 playbook——
+# 跟 gitlab-runner 那次是同一個缺口（見 install-gitlab-runner.yml）。這次借新增
+# tashuchiu.online 網域名稱的機會一起補上，之後改這張憑證都走這支 playbook。
+#
+# cert-manager 偵測到 Certificate 資源的 dnsNames 變動後，會自動重新簽發並更新
+# gitlab-wildcard-tls 這個 Secret，不需要手動觸發重新簽發或重啟任何 Pod。
+
+- name: Update GitLab wildcard certificate
+  hosts: control_plane
+  become: false
+  vars:
+    kubeconfig: /home/ubuntu/.kube/config
+
+  tasks:
+    - name: Copy GitLab certificate manifest
+      copy:
+        src: ../manifests/gitlab-certificate.yml
+        dest: /tmp/gitlab-certificate.yml
+
+    - name: Apply GitLab certificate manifest
+      command: kubectl apply -f /tmp/gitlab-certificate.yml
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: apply_result
+      changed_when: "'unchanged' not in apply_result.stdout"
+
+    - name: Wait for cert-manager to reissue the certificate
+      command: >
+        kubectl wait certificate/gitlab-wildcard-tls -n gitlab
+        --for=condition=Ready --timeout=120s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"

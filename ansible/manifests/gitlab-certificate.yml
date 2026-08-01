@@ -2,6 +2,14 @@
 # 單一 host，但共用同一個 secretName。若讓 cert-manager ingress-shim
 # 自動幫每個 ingress 各建一個 Certificate，會互搶同一個 secret 互相覆蓋。
 # 改用一個明確的多 SAN 憑證涵蓋所有 host，ingress 只負責讀取現成的 secret。
+#
+# 2026-08-02：網域搬到 tashuchiu.online 之後，這張憑證的 dnsNames 從沒更新過，
+# 只有舊的 .nip.io 名稱。叢集內部直連 ingress-nginx（不經過 Cloudflare）時，
+# SNI=gitlab.tashuchiu.online / registry.tashuchiu.online 對不到這張憑證的
+# SAN，ingress-nginx 退回預設的 fake cert，TLS handshake 直接失敗——這正是
+# GitLab Runner 內部路徑（見 gitlab-runner-values.yml host_aliases）跟 image
+# pull 內部路徑會失敗的根因。新增這兩個網域，舊的 .nip.io 名稱保留不動
+# （沒有任何東西還在用，但拿掉也沒有實質好處，不做非必要的變更）。
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -10,6 +18,8 @@ metadata:
 spec:
   secretName: gitlab-wildcard-tls
   dnsNames:
+    - gitlab.tashuchiu.online
+    - registry.tashuchiu.online
     - gitlab.192.168.100.200.nip.io
     - registry.192.168.100.200.nip.io
     - minio.192.168.100.200.nip.io
