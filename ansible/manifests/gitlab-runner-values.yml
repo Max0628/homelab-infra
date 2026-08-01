@@ -4,14 +4,16 @@ gitlabUrl: https://gitlab.tashuchiu.online
 
 certsSecretName: homelab-ca-cert
 
-# 2026-08-02：Runner 管理用的常駐 pod（不是每次任務動態產生的 job pod，見下方
-# runners.kubernetes.host_aliases 的說明）自己輪詢 GitLab 找新工作，也會打
-# gitlab.tashuchiu.online——流量很小，加速效果有限，但同樣沒必要繞出叢集外面，
-# 順手一起導去內部路徑。
-hostAliases:
-  - ip: "10.99.248.59"
-    hostnames:
-      - "gitlab.tashuchiu.online"
+# 2026-08-02：試過幫 Runner 管理用的常駐 pod 也加 hostAliases 導去內部路徑，
+# 結果直接讓 Runner 完全掛掉——管理 pod 自己信任的憑證檔案是用舊網址命名的
+# （homelab-ca-cert 裡的 key 是 gitlab.192.168.100.200.nip.io.crt，GitLab Runner
+# 是照檔名對應網址找信任憑證的慣例），改連新網址後找不到對應的信任憑證，
+# 直接 x509 unknown authority，管理 pod 卡在無限重試註冊、完全收不到 job。
+# 撤回這項——這條沒有前面 job pod 那條（走 registry.tashuchiu.online 的部分）
+# 用的是完全不同的信任機制，不能照搬同一招。要重新做的話，得先幫
+# homelab-ca-cert 這個 Secret 補上 gitlab.tashuchiu.online.crt 這個 key
+# （內容跟現有那把一樣），管理 pod 才認得。這次先不做，流量本來就小，優先
+# 保證 Runner 能正常收 job。
 
 runners:
   config: |
