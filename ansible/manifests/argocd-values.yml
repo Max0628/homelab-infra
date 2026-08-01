@@ -3,7 +3,7 @@ configs:
     server.insecure: true
   tls:
     certificates:
-      gitlab.192.168.100.200.nip.io: |
+      gitlab.tashuchiu.online: |
         -----BEGIN CERTIFICATE-----
         MIIDADCCAeigAwIBAgIQQ4EPTt/hfcSgQe+Ird+X6jANBgkqhkiG9w0BAQsFADAa
         MRgwFgYDVQQDEw9ob21lbGFiLXJvb3QtY2EwHhcNMjYwNzAyMTU0NzQ5WhcNMzYw
@@ -28,7 +28,7 @@ server:
   ingress:
     enabled: true
     ingressClassName: nginx
-    hostname: argocd.192.168.100.200.nip.io
+    hostname: argocd.tashuchiu.online
     annotations:
       cert-manager.io/cluster-issuer: homelab-ca-issuer
     tls: true

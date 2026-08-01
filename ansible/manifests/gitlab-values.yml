@@ -16,6 +16,19 @@ global:
     # 陷入 /users/sign_in 無限重新整理的迴圈（不是網路層問題，之前誤以為是
     # cookie/TLS 沒設好，兩者都要一起處理才會真的正常）。使用者決定只保留
     # 外部網址，原本的 .nip.io 內網登入之後不再保證能用。
+    #
+    # 2026-08-01 更正：上面「registry 不受影響」的假設是錯的。registry 元件
+    # 本身的 hostname（registry.192.168.100.200.nip.io）確實沒變，但它的
+    # JWT 認證 realm（container image pull 時用來跟 GitLab 換 token 的網址）
+    # 預設是用 `gitlab.gitlab.hostname` 這個 helper 算出來的，讀的是
+    # `global.hosts.gitlab.name`（沒設，所以退回 domain 組出來的舊內網網址），
+    # 不是這裡的 hostnameOverride——兩個是完全不同的 helper（見
+    # charts/registry/templates/_helpers.tpl 的 `registry.authEndpoint`
+    # vs charts/gitlab/templates/_helpers.tpl 的 `gitlab.gitlab.hostname`）。
+    # 內網登入關閉之後，這個舊網址整個 404，導致所有 pod image pull 認證失敗、
+    # ImagePullBackOff（api pod 卡了 2 天才發現）。修法是用 registry 子圖表
+    # 自己提供的 `authEndpoint` override（見下方 `registry:` 區塊），不要
+    # 動 domain 或 hostnameOverride，registry 自己的 hostname 維持內網不變。
     gitlab:
       hostnameOverride: gitlab.tashuchiu.online
 
@@ -127,6 +140,11 @@ gitlab:
 
 registry:
   enabled: true
+  # 見上方 global.hosts.gitlab 區塊 2026-08-01 註解：registry 的 JWT 認證
+  # realm 不會跟著 hostnameOverride 走，要用這個 chart 自己的 authEndpoint
+  # 明確覆蓋，否則預設會退回內網舊網址（現在已經 404）。只影響「跟 GitLab
+  # 換 token」這個動作打去哪裡，跟 registry 本身的 hostname 無關。
+  authEndpoint: https://gitlab.tashuchiu.online
 
 # dummy email 讓 certmanager-issuer sub-chart 通過 schema 驗證
 certmanager-issuer:

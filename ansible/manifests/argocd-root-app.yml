@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://gitlab.192.168.100.200.nip.io/homelab/k8s.git
+    repoURL: https://gitlab.tashuchiu.online/homelab/k8s.git
     targetRevision: main
     path: .
     directory:
