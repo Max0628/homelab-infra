@@ -17,9 +17,8 @@
 # （Let's Encrypt，透過 Cloudflare DNS-01 驗證），job pod 用預設信任清單就能
 # 直接驗證通過，不需要任何自訂信任設定，從根本繞開這個限制。
 #
-# 先切 letsencrypt-staging 測試 DNS-01 流程能不能跑通（簽發沒有嚴格次數限制，
-# 但簽出來的憑證不受信任，只能檢查簽發是否成功，不能拿來驗證真實連線），
-# 確認沒問題後再切 letsencrypt-prod。
+# 2026-08-02 三次更正：letsencrypt-staging 測試過，DNS-01 流程完全跑通
+# （憑證 issuer 確認是 "(STAGING) ..."，Certificate 資源 Ready），切正式的。
 #
 # dnsNames 拿掉 .nip.io 那三個——Let's Encrypt 用 DNS-01 驗證網域所有權，
 # nip.io 是別人的網域，我們沒有那邊的 DNS 控制權，簽不出來，而且已確認
@@ -35,6 +34,6 @@ spec:
     - gitlab.tashuchiu.online
     - registry.tashuchiu.online
   issuerRef:
-    name: letsencrypt-staging
+    name: letsencrypt-prod
     kind: ClusterIssuer
     group: cert-manager.io
