@@ -31,6 +31,16 @@ global:
     # 動 domain 或 hostnameOverride，registry 自己的 hostname 維持內網不變。
     gitlab:
       hostnameOverride: gitlab.tashuchiu.online
+      # 2026-08-01 四度更正：上面兩次更正只處理了 registry 的 auth realm，漏了
+      # 同一個 fallback 邏輯也套用在 gitlab.host 本身（見 charts/gitlab/templates/
+      # _helpers.tpl 的 `gitlab.gitlab.hostname`，讀的是 global.hosts.gitlab.name，
+      # 不是 hostnameOverride）——GitLab Rails 端拿 gitlab.host 組每個 CI job 的
+      # git clone URL（CI_REPOSITORY_URL），沒設這個值就悄悄退回 domain 算出來的
+      # 舊內網網址，導致 Runner 每次都去 clone 一個現在憑證信任鏈對不上的舊網址，
+      # pipeline checkout 那步直接 x509 failed（unable to get local issuer
+      # certificate）。跟 registry 那次是同一個 chart 的同一種陷阱，只是這次踩在
+      # gitlab.host 這個欄位上。
+      name: gitlab.tashuchiu.online
     # 2026-08-01 三度更正：前兩次分別用了 registry: hostname:（不存在的 key，
     # 對 registry 子圖表沒作用）跟後來才發現真正決定 registry Ingress host
     # 的是這裡——global.hosts.registry.name（見 charts/registry/templates/

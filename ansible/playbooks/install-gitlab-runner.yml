@@ -1,0 +1,62 @@
+---
+# GitLab Runner（Kubernetes executor）原本是手動下 helm install 裝的，沒有對應的
+# playbook——改 gitlab-runner-values.yml 之後不知道怎麼重新套用，得回頭去 Helm
+# release 的 secret 裡挖 chart 版本/repo 才拼湊出正確指令（見 2026-08-02 job-radar
+# CI 排查紀錄）。這支補齊這個缺口，比照 install-gitlab.yml 的既有模式。
+#
+# 前提：Runner 必須已經註冊過一次（gitlab-runner Secret 裡要有 runner-token）。
+# 第一次註冊不在這支涵蓋範圍內——那次要先在 GitLab UI 產生 registration token，
+# 手動跑一次 helm install 帶 --set runnerToken=<registration token>。
+
+- name: Upgrade GitLab Runner
+  hosts: control_plane
+  become: false
+  vars:
+    kubeconfig: /home/ubuntu/.kube/config
+    chart_version: "0.91.0"
+
+  tasks:
+    - name: Add GitLab Helm repo
+      command: helm repo add gitlab https://charts.gitlab.io
+      register: repo_add
+      failed_when: repo_add.rc != 0 and 'already exists' not in repo_add.stderr
+      changed_when: "'already exists' not in repo_add.stderr"
+
+    - name: Update Helm repos
+      command: helm repo update
+
+    - name: Extract existing runner token from cluster secret
+      command: >
+        kubectl get secret gitlab-runner -n gitlab-runner
+        -o jsonpath={.data.runner-token}
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: runner_token_b64
+      changed_when: false
+      no_log: true
+
+    - name: Decode runner token
+      set_fact:
+        runner_token: "{{ runner_token_b64.stdout | b64decode }}"
+      no_log: true
+
+    - name: Copy GitLab Runner values file
+      copy:
+        src: ../manifests/gitlab-runner-values.yml
+        dest: /tmp/gitlab-runner-values.yml
+
+    - name: Upgrade GitLab Runner
+      command: >
+        helm upgrade --install gitlab-runner gitlab/gitlab-runner
+        --namespace gitlab-runner
+        --version {{ chart_version }}
+        -f /tmp/gitlab-runner-values.yml
+        --set runnerToken={{ runner_token }}
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      no_log: true
+
+    - name: Wait for GitLab Runner rollout
+      command: kubectl rollout status deployment/gitlab-runner -n gitlab-runner --timeout=120s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
