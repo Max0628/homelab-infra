@@ -1,0 +1,37 @@
+---
+# kubelet/containerd 在每個節點上，是用節點自己的 DNS/hosts 設定解析 image registry
+# 位址，不是走 CoreDNS，Pod 層級的 host_aliases（見 gitlab-runner-values.yml）對這個
+# 沒用。跟 GitLab Runner 那次同一個成因：registry.tashuchiu.online 解析到 Cloudflare
+# 的公開 IP，image pull（尤其 job-radar 這種幾百 MB 的 JVM image）繞出去再繞回來，
+# 有一樣的風險，甚至影響更大——每次部署都會經過這條路徑（見 2026-08-02 排查紀錄）。
+#
+# 前置條件已經處理完：
+# - CA 信任：install-registry-ca-trust.yml 已把 homelab-root-ca 裝進三個節點的
+#   系統信任庫
+# - 憑證涵蓋範圍：update-gitlab-certificate.yml 已讓 gitlab-wildcard-tls 涵蓋
+#   registry.tashuchiu.online
+# 這支補最後一塊：讓節點自己解析這個網址到內部路徑。
+#
+# 用 LoadBalancer 的 external IP（192.168.100.200，MetalLB L2 模式在區網廣播的
+# 真實 IP），不用 ClusterIP——節點主機本身（不是 Pod 網路命名空間）走不走得到
+# ClusterIP，要看 kube-proxy 的實作細節，external IP 是區網上任何一台機器
+# （包括節點自己）都能直接連到的位址，不用猜這個。
+#
+# 只加 registry.tashuchiu.online，不加 gitlab.tashuchiu.online——節點作業系統
+# 本身沒有需要直接打 GitLab 網頁/API 的場景，不做非必要的變更。
+
+- name: Route registry.tashuchiu.online to internal ingress on all nodes
+  hosts: control_plane:workers
+  become: true
+
+  vars:
+    registry_host: registry.tashuchiu.online
+    internal_ip: "192.168.100.200"
+
+  tasks:
+    - name: Add internal route for registry.tashuchiu.online to /etc/hosts
+      lineinfile:
+        path: /etc/hosts
+        line: "{{ internal_ip }} {{ registry_host }}"
+        regexp: "^[0-9.]+\\s+{{ registry_host }}$"
+        state: present
