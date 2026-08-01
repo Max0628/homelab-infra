@@ -1,0 +1,48 @@
+# Let's Encrypt 憑證透過 Cloudflare DNS-01 challenge 簽發，取代 gitlab-wildcard-tls
+# 原本用的自簽 homelab-ca-issuer——這樣簽出來的憑證是公開受信任的，任何用戶端
+# （包括 GitLab Runner job pod 這種沒有額外信任自訂 CA 能力的環境）都能直接驗證
+# 通過，不需要額外的信任設定，繞開 GitLab Runner 對自簽 CA 傳遞不完整的已知限制
+# （見 2026-08-02 job-radar CI 排查紀錄）。
+#
+# 先用 staging 測試整個 DNS-01 challenge 流程能不能跑通（簽發沒有嚴格次數限制，
+# 但簽出來的憑證不受瀏覽器/系統信任），確認沒問題後才切換 gitlab-certificate.yml
+# 的 issuerRef 去用 production（Let's Encrypt 對失敗重試/簽發次數有限制，直接用
+# production 測試容易不小心撞到限制）。
+#
+# apiTokenSecretRef 指向的 cloudflare-api-token-secret 不在這份 manifest 裡建立、
+# 也不進版控（見 install-letsencrypt-issuer.yml），token 權限只需要
+# Zone:DNS:Edit，範圍限定在 tashuchiu.online 這個 zone。
+
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: maxchauo0628@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-account-key
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token-secret
+              key: api-token
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: maxchauo0628@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-account-key
+    solvers:
+      - dns01:
+          cloudflare:
+            apiTokenSecretRef:
+              name: cloudflare-api-token-secret
+              key: api-token

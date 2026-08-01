@@ -1,0 +1,51 @@
+---
+# 建立 Cloudflare API Token 的 Secret（給 letsencrypt-issuer.yml 的 DNS-01 solver
+# 用），並套用 staging + prod 兩個 ClusterIssuer。
+#
+# token 用 --extra-vars cf_api_token=... 帶入，不寫進任何版控檔案，也不寫進
+# 這台機器的 shell history 以外的地方。
+
+- name: Set up Let's Encrypt via Cloudflare DNS-01
+  hosts: control_plane
+  become: false
+  vars:
+    kubeconfig: /home/ubuntu/.kube/config
+
+  tasks:
+    - name: Check if Cloudflare API token secret already exists
+      command: kubectl get secret cloudflare-api-token-secret -n cert-manager
+      register: secret_check
+      failed_when: false
+      changed_when: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Create Cloudflare API token secret
+      command: >
+        kubectl create secret generic cloudflare-api-token-secret
+        --namespace cert-manager
+        --from-literal=api-token={{ cf_api_token }}
+      when: secret_check.rc != 0
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      no_log: true
+
+    - name: Copy Let's Encrypt ClusterIssuer manifest
+      copy:
+        src: ../manifests/letsencrypt-issuer.yml
+        dest: /tmp/letsencrypt-issuer.yml
+
+    - name: Apply Let's Encrypt ClusterIssuers
+      command: kubectl apply -f /tmp/letsencrypt-issuer.yml
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for staging ClusterIssuer to be Ready
+      command: kubectl wait clusterissuer/letsencrypt-staging --for=condition=Ready --timeout=60s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+
+    - name: Wait for prod ClusterIssuer to be Ready
+      command: kubectl wait clusterissuer/letsencrypt-prod --for=condition=Ready --timeout=60s
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
