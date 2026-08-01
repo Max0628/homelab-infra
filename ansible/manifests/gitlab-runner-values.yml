@@ -4,27 +4,43 @@ gitlabUrl: https://gitlab.tashuchiu.online
 
 certsSecretName: homelab-ca-cert
 
+# 2026-08-02：Runner 管理用的常駐 pod（不是每次任務動態產生的 job pod，見下方
+# runners.kubernetes.host_aliases 的說明）自己輪詢 GitLab 找新工作，也會打
+# gitlab.tashuchiu.online——流量很小，加速效果有限，但同樣沒必要繞出叢集外面，
+# 順手一起導去內部路徑。
+hostAliases:
+  - ip: "10.99.248.59"
+    hostnames:
+      - "gitlab.tashuchiu.online"
+
 runners:
   config: |
     [[runners]]
       [runners.kubernetes]
         namespace = "gitlab-runner"
         image = "alpine:latest"
-        # 2026-08-02：CI job pod（git clone + 上傳產物/cache/job trace，這幾個現在都打
-        # 同一個網址 gitlab.tashuchiu.online）原本會解析到 Cloudflare 的公開 IP，明明
-        # Runner 跟 GitLab 在同一個叢集裡，卻要繞出去再繞回來——大檔案上傳因此撞到
+        # 2026-08-02：CI job pod（git clone + 上傳產物/cache/job trace，還有 kaniko
+        # push image 到 registry）原本會解析到 Cloudflare 的公開 IP，明明 Runner 跟
+        # GitLab 在同一個叢集裡，卻要繞出去再繞回來——大檔案上傳/推送因此撞到
         # Cloudflare 免費版 100MB 限制，502 + 無窮重試（見 job-radar CI 排查紀錄）。
-        # 這裡只在 job pod 自己的 /etc/hosts 加一條對應，導去叢集內部的
+        # 這裡只在 job pod 自己的 /etc/hosts 加對應，導去叢集內部的
         # ingress-nginx-controller（Kubernetes hostAliases 只能填 IP，不能填 DNS 名稱，
         # 見下方 ip 欄位；這是該 Service 的 ClusterIP，只要沒重建這個 Service 就穩定）。
         # 不動 CoreDNS、不影響任何其他元件（尤其 ArgoCD——它也打
         # gitlab.tashuchiu.online，但走的是外部 Cloudflare 路徑，信任的是 Cloudflare
         # 自己的公開憑證，不是這裡的內部憑證，改全域 DNS 會連帶弄壞它，這裡刻意只在
-        # Runner 自己的 job pod 範圍內做，見排查紀錄）。憑證沒問題：job pod 本來就透過
-        # certsSecretName（見上方）信任 homelab-root-ca，這張憑證正是內部 ingress 用的。
+        # Runner 自己的 job pod 範圍內做，見排查紀錄）。
+        #
+        # 2026-08-02 更正：下面這段憑證信任的說法原本是錯的——certsSecretName 只會把
+        # CA 掛進「Runner 管理用的常駐 pod」，不會自動帶進這裡講的、每次任務動態產生
+        # 的 job pod，這是 GitLab Runner 本身的已知限制（見 GitLab Issue #3715），
+        # 目前沒有乾淨解法，job pod 內建 git checkout / artifact 上傳這兩步暫時還是
+        # 無法信任這裡的內部憑證。kaniko push image 到 registry 不受影響——它是
+        # .gitlab-ci.yml 裡明寫的 script，有自己一套獨立的憑證信任設定
+        # （--registry-certificate 參數），不靠這個壞掉的機制。
         [[runners.kubernetes.host_aliases]]
           ip = "10.99.248.59"
-          hostnames = ["gitlab.tashuchiu.online"]
+          hostnames = ["gitlab.tashuchiu.online", "registry.tashuchiu.online"]
       # CI job pod 每次都是全新的（Kubernetes executor 沒有固定本機硬碟可以留快取），
       # 接上 GitLab 自帶的 MinIO（gitlab-minio，Helm chart 內建的一部分，不是另外新裝的）
       # 當快取後端，job 開始/結束時自動上傳/下載 .gitlab-ci.yml 裡 cache: 指定的資料夾。
